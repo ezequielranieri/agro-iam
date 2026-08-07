@@ -1,0 +1,89 @@
+package ports
+
+import (
+	"context"
+
+	"github.com/ezequielranieri/agro-iam/internal/domain"
+)
+
+// TokenClaims is the payload carried inside an access token.
+type TokenClaims struct {
+	UserID   string
+	TenantID string
+	Role     string
+}
+
+// TokenManager issues and verifies short-lived access tokens (JWT, HS256).
+type TokenManager interface {
+	// Issue creates a new access token for the given claims.
+	Issue(claims TokenClaims) (string, error)
+	// Verify parses and validates a token, returning its claims or an error.
+	Verify(token string) (*TokenClaims, error)
+}
+
+// PasswordHasher hashes and verifies passwords. The implementation (Argon2id)
+// is an infrastructure concern; the application only needs this contract.
+type PasswordHasher interface {
+	// Hash encodes a password into a self-contained PHC string.
+	Hash(password string) (string, error)
+	// Verify checks a password against a previously encoded hash string.
+	Verify(encoded, password string) (bool, error)
+}
+
+// RefreshTokenRepository persists opaque refresh tokens (hashed) and their
+// families so rotation and replay detection can be enforced.
+type RefreshTokenRepository interface {
+	// Store writes a refresh token record.
+	Store(ctx context.Context, token *RefreshTokenRecord) error
+	// FindByHash returns the token record by SHA-256 hash, or domain.ErrNotFound.
+	FindByHash(ctx context.Context, hash string) (*RefreshTokenRecord, error)
+	// Revoke marks a token revoked, optionally noting the token that replaced it.
+	Revoke(ctx context.Context, id, replacedBy string) error
+	// RevokeFamily revokes every still-active token in a family (replay response).
+	RevokeFamily(ctx context.Context, familyID string) error
+}
+
+// RefreshTokenRecord mirrors the app.refresh_tokens row at the port level so the
+// service does not need to import the domain schema for this infrastructure-
+// owned concept.
+type RefreshTokenRecord struct {
+	ID         string
+	UserID     string
+	TenantID   string
+	FamilyID   string
+	TokenHash  string
+	ExpiresAt  int64 // unix seconds
+	RevokedAt  *int64
+	ReplacedBy string
+}
+
+// AuthService is the use-case boundary for authentication. It is consumed by the
+// HTTP layer, which knows nothing about JWTs or Argon2id.
+type AuthService interface {
+	// Login validates credentials and returns an access token, an opaque
+	// refresh token and the access token lifetime in seconds.
+	Login(ctx context.Context, tenantID, email, password string) (*AuthSession, error)
+	// Refresh rotates a refresh token: the presented token is revoked and a new
+	// one is issued in the same family. A previously-used token triggers full
+	// family revocation (replay detection).
+	Refresh(ctx context.Context, refreshToken string) (*AuthSession, error)
+}
+
+// AuthSession is the result of a successful Login or Refresh.
+type AuthSession struct {
+	AccessToken  string
+	RefreshToken string
+	ExpiresIn    int64 // seconds until the access token expires
+	UserID       string
+	TenantID     string
+	Role         string
+}
+
+// LotService is the use-case boundary for lot management. Every operation is
+// scoped to a tenant, which the HTTP layer takes from the authenticated claims.
+type LotService interface {
+	// ListByTenant returns every lot owned by the tenant.
+	ListByTenant(ctx context.Context, tenantID string) ([]*domain.Lot, error)
+	// Create validates and persists a new lot owned by the tenant.
+	Create(ctx context.Context, tenantID string, name string, areaHA float64, crop string) (*domain.Lot, error)
+}

@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      # The integration tests create and own their schema (see
+      # internal/infrastructure/postgres/integration_test.go), so a stock
+      # postgres service container is all CI needs — no migrate container.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: agroiam_test
+          POSTGRES_USER: agroiam
+          POSTGRES_PASSWORD: agroiam
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agroiam -d agroiam_test"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # TEST_DATABASE_URL is set, so the RLS integration tests run for real
+      # against the service container; unit tests run as always.
+      - name: Test (unit + RLS integration)
+        env:
+          TEST_DATABASE_URL: postgres://agroiam:agroiam@localhost:5432/agroiam_test?sslmode=disable
+        run: go test ./...
