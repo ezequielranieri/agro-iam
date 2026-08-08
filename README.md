@@ -7,6 +7,10 @@ JWT + rotating refresh-token families) in idiomatic Go.
 
 [![ci](https://github.com/ezequielranieri/agro-iam/actions/workflows/ci.yml/badge.svg)](https://github.com/ezequielranieri/agro-iam/actions/workflows/ci.yml)
 
+> [Español](./README.es.md)
+
+> Documentation: [DECISIONS.md](./DECISIONS.md) — architecture decisions & project constitution
+
 > Slice 0 — foundation skeleton: domain model, ports, repositories, auth
 > primitives, RLS-backed schema, and the HTTP shell. End-to-end flows (user
 > provisioning, lot/campaign CRUD, RBAC endpoints) arrive in later slices.
@@ -208,9 +212,11 @@ execute for real in CI — no `docker-compose` file involved.
 ## Roadmap
 
 - [x] Slice 0 — skeleton: schema + RLS, repos, auth primitives, HTTP shell
-- [ ] Slice 1 — user provisioning, RBAC enforcement middleware, tenant bootstrap
-- [ ] Slice 2 — lots, campaigns, applications CRUD over the RLS repos
-- [ ] Slice 3 — audit event emission, Redis-backed rate limiting, refresh rotation hardening (token-compromise alerting)
+- [x] Slice 1 — JWT auth middleware, protected lot endpoints with real RLS isolation, tenant-context claims
+- [x] Slice 2 — RLS isolation integration tests against live PostgreSQL (dedicated non-superuser role) + GitHub Actions CI
+- [ ] Slice 3 — audit event emission with hash-chaining, Redis-backed rate limiting, breach detection / token-compromise alerting
+- [ ] Slice 4 — campaigns & applications CRUD over the RLS repos, user provisioning, RBAC enforcement
+- [ ] Slice 5 — demo frontend / deployed demo
 
 ## License
 
