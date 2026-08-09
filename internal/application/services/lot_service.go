@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"log/slog"
 	"time"
 
 	"github.com/ezequielranieri/agro-iam/internal/application/ports"
@@ -14,20 +13,16 @@ import (
 // ports.LotRepository; RLS enforcement is the repository's concern, not the
 // service's.
 type lotService struct {
-	lots  ports.LotRepository
-	audit ports.AuditService
-	log   *slog.Logger
-	now   func() time.Time
+	lots    ports.LotRepository
+	signals ports.BreachSignalSink
+	now     func() time.Time
 }
 
-// NewLotService wires the repository into a LotService. audit may be nil
-// (emitters fail open with a WARN) and log may be nil (discarded). The clock is
-// injectable for deterministic tests; pass time.Now when unsure.
-func NewLotService(lots ports.LotRepository, audit ports.AuditService, log *slog.Logger) ports.LotService {
-	if log == nil {
-		log = slog.New(slog.DiscardHandler)
-	}
-	return &lotService{lots: lots, audit: audit, log: log, now: time.Now}
+// NewLotService wires the repository into a LotService. signals may be nil
+// (emission is a no-op). The clock is injectable for deterministic tests; pass
+// time.Now when unsure.
+func NewLotService(lots ports.LotRepository, signals ports.BreachSignalSink) ports.LotService {
+	return &lotService{lots: lots, signals: signals, now: time.Now}
 }
 
 // ListByTenant returns every lot of the tenant. The tenant id is the scoping
@@ -64,9 +59,10 @@ func (s *lotService) Create(ctx context.Context, tenantID, actorUserID, name str
 		return nil, err
 	}
 
-	// Emit lot.create (info) with the actor. Fail-open: an audit error never
-	// fails the create.
-	EmitEvent(ctx, s.log, s.audit, tenantID, actorUserID,
+	// Emit lot.create (info) with the actor. Signal is "" (R6: no new signal —
+	// the action drives the audit row). Fail-open: a sink error never fails the
+	// create.
+	emitEvent(ctx, s.signals, tenantID, actorUserID, "", false,
 		&Event{Action: "lot.create", Severity: domain.SeverityInfo, EmitAudit: true}, "")
 	return lot, nil
 }

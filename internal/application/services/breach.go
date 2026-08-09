@@ -5,7 +5,6 @@ package services
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/ezequielranieri/agro-iam/internal/application/ports"
 	"github.com/ezequielranieri/agro-iam/internal/domain"
@@ -95,44 +94,11 @@ var breachTable = map[Signal]Event{
 	// SignalExpiredTokenReplay intentionally absent: no event.
 }
 
-// EmitEvent applies the classifier output: slog always; audit row only when
-// the event says so and the caller is NOT anonymous. A nil audit service
-// fails open with a WARN, matching the audit fail-open contract.
-func EmitEvent(ctx context.Context, log *slog.Logger, audit ports.AuditService, tenantID, actorID string, ev *Event, requestID string) {
-	if ev == nil {
-		return
-	}
-
-	attrs := []any{
-		"action", ev.Action,
-		"severity", ev.Severity,
-		"tenant", tenantID,
-		"actor", actorID,
-		"request_id", requestID,
-	}
-	switch ev.Severity {
-	case domain.SeverityCritical:
-		log.Error("security", attrs...)
-	case domain.SeverityWarn:
-		log.Warn("security", attrs...)
-	default:
-		log.Info("security", attrs...)
-	}
-
-	if !ev.EmitAudit || audit == nil || tenantID == "" {
-		return
-	}
-	if err := audit.Record(ctx, tenantID, actorID, ev.Action, "security", ev.Action, nil, ev.Severity); err != nil {
-		log.Warn("audit emission failed (fail-open)", "action", ev.Action, "error", err)
-	}
-}
-
 // EmitSignal is the exported emit seam every caller (services and middleware)
 // uses: it classifies the signal, maps the result onto the port payload and
 // hands it to the sink. Detect runs inside so every caller gets the same
 // classification. A nil sink is a no-op; sink failures are informational
-// (fail-open, R4). It replaces EmitEvent at the emit sites (PR2); EmitEvent is
-// kept until the last callers switch over.
+// (fail-open, R4).
 func EmitSignal(ctx context.Context, sink ports.BreachSignalSink, signal Signal, anonymous bool, tenantID, actorID, requestID string) {
 	emitEvent(ctx, sink, tenantID, actorID, signal, anonymous, Detect(signal, anonymous), requestID)
 }
