@@ -361,6 +361,126 @@ Status legend: `Accepted` = settled; `Open` = proposal, do not implement.
   everything.
 - Discipline is required to keep the layers honest as the codebase grows.
 
+### 2.13 Tamper-evident per-tenant audit chaining — Status: Accepted
+
+**Rule**
+- The audit trail MUST be **hash-chained per tenant**: every `app.audit_log` row
+  carries `seq`, `prev_hash` and `chain_hash` with `UNIQUE (tenant_id, seq)`.
+- The genesis entry uses `seq = 1` and `prev_hash` = 64 hex zeros; every
+  subsequent row's `prev_hash` MUST equal the previous row's `chain_hash`.
+- `chain_hash` MUST be `SHA-256` over the fixed field order
+  `prev_hash|seq|tenant_id|actor_user_id|action|entity_type|entity_id|payload|created_at`
+  where `payload` is the **canonicalized** JSON (decode → re-marshal), and
+  `created_at` is truncated to microsecond precision (Postgres `timestamptz`
+  resolution) — the exact same code path for insert and verify, so no drift.
+- Chain verification (`VerifyChain`) MUST be internal: recompute the chain from
+  all stored rows and report the first broken `seq`. No public endpoint (slice 3
+  scope).
+- Audit appends MUST run inside `WithTenant` (RLS `FORCE` would otherwise reject
+  the insert) and MUST be fail-open: an audit failure never fails the main flow,
+  only a WARN log.
+- The single-column `id` PK of `app.audit_log` is a deliberate deviation from
+  rule 2.3: the table is never referenced by a foreign key, so the composite-PK
+  side channel does not apply.
+
+**Alternatives rejected**
+- *Global chain (one sequence for all tenants)*: a tenant session cannot read
+  other tenants' rows under RLS, so the append would break; it also serializes
+  every tenant on one hot row and leaks cross-tenant ordering.
+- *Database trigger computing the hash*: zero drift, but security logic hidden in
+  migration SQL, untestable in pure Go, and against the convention of keeping
+  logic in services.
+- *Hashing the full SQL row*: any future migration adding a column would
+  invalidate the whole chain.
+
+**Cost accepted**
+- One indexed tail read + insert per audit event (sync, on the write path).
+- Verification is O(n) — fine at portfolio volume, revisit if it grows.
+- Payloads must stay float64-safe so canonicalization is stable; the integration
+  test pins this.
+
+---
+
+### 2.14 Per-route fixed-window rate limiting — Status: Accepted
+
+**Rule**
+- Rate limiting MUST use a **fixed-window** model (not sliding or token
+  bucket): one atomic `INCR` + `PEXPIRE` Lua script on Redis, with a
+  per-process in-memory twin (`map[string]*tokenBucket` + mutex) as the
+  fallback when Redis is unavailable.
+- Redis MUST NOT be a hard dependency: a nil client or a Redis error fails
+  **open** (allows the request) with a WARN log — a healthy rate limiter
+  never becomes a denial of service for legitimate users.
+- Defaults per route: `POST /api/v1/auth/login` 5/min per IP, `POST
+  /api/v1/auth/refresh` 30/min per IP, authenticated API routes (`/api/v1/lots`)
+  120/min per `tenant:user`.
+- Key derivation: auth routes use `rl:auth:{ip}` (port stripped); API routes
+  use `rl:api:{tenant}:{user}` from the JWT claims, so the middleware MUST run
+  AFTER `RequireAuth` on protected routes. `/healthz` is always exempt.
+- Exceeded limits MUST return `429` with a JSON `writeError` body and a
+  `Retry-After` header (ceiling seconds).
+- The in-memory fallback is correct only for a **single instance**; a
+  multi-instance deployment needs Redis (or shared state) and is out of scope
+  for this slice.
+
+**Alternatives rejected**
+- *Sliding window / token bucket via sorted sets*: more accurate, but more Lua
+  and more keys per request; fixed window matches the threat model at
+  portfolio volume and is simpler to reason about.
+- *Fail-closed on Redis outage*: would turn a Redis blip into an availability
+  outage for every authenticated call — unacceptable for a public API.
+- *Limiting by tenant only*: a single compromised user could exhaust the whole
+  tenant's quota; per-`tenant:user` keeps one bad actor from DoSing the
+  tenant.
+
+**Cost accepted**
+- Fixed window allows bursts at window edges (up to 2× rate in pathological
+  timing) — accepted for simplicity; revisit if the API sees adversarial
+  bursts.
+- In-memory fallback is per-process state: lost on restart and wrong across
+  instances — documented limitation, fine for the single-instance posture.
+
+---
+
+### 2.15 Breach detection — severitized events, slog only, no alerting — Status: Accepted
+
+**Rule**
+- Security-relevant outcomes are classified by a pure, table-driven `Detect()`
+  classifier into events with exactly three severities: `info` | `warn` |
+  `critical`, each mapped to the same-named slog level (`critical` -> `ERROR`
+  with `request_id`).
+- Every event is **always** emitted to slog; an event becomes an `app.audit_log`
+  row **only** when the request has tenant context (`EmitAudit` and non-anonymous).
+  Anonymous events (login failures, auth-route rate limits, refresh replays
+  without claims) are slog-only — under RLS there is no tenant to own the row.
+- Signal -> event mapping is a single source of truth (`breachTable`):
+  refresh-token replay -> `auth.refresh.replay` / critical / audit; rate-limit
+  exceeded -> `security.rate_limit.exceeded` / warn / audit; login success ->
+  `auth.login` / info / audit; refresh success -> `auth.refresh` / info / audit;
+  login failure -> `auth.login.failed` / info / audit; cross-tenant probe ->
+  `security.cross_tenant_probe` / warn / **no** audit row.
+- An **expired** token replay is NOT a signal: clients routinely retry with
+  stale tokens, so it produces no event.
+- Emission is fail-open: an audit failure only WARN-logs, never fails the
+  caller.
+- **No email/webhook/pager alerting in this slice.** Severitized slog + audit
+  rows are the substrate; alert routing is explicitly future work.
+
+**Alternatives rejected**
+- *Email/webhook alerting now*: introduces delivery, retry and secret-handling
+  concerns that would balloon slice 3; the slog+audit substrate supports it
+  later without rework.
+- *One flat "suspicious" event*: destroys the operator's ability to triage —
+  a replay (theft) and a wrong password (noise) must be distinguishable at a
+  glance.
+- *Persisting anonymous events*: impossible under RLS (no tenant owns the row)
+  and unnecessary — the slog stream carries them with request ids.
+
+**Cost accepted**
+- The `breachTable` must stay small and deliberate; every new signal is a
+  review point.
+- Operators triage the slog stream; there is no dashboard/alert in this slice.
+
 ---
 
 ## 3. Code conventions

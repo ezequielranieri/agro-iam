@@ -388,6 +388,135 @@ implementar.
 - Se requiere disciplina para mantener las capas honestas conforme crece el
   código.
 
+### 2.13 Hash-chaining de auditoría por tenant, a prueba de manipulación — Estado: Accepted
+
+**Regla**
+- El trail de auditoría DEBE estar **encadenado por hash por tenant**: cada fila
+  de `app.audit_log` lleva `seq`, `prev_hash` y `chain_hash` con
+  `UNIQUE (tenant_id, seq)`.
+- La entrada génesis usa `seq = 1` y `prev_hash` = 64 ceros hex; el `prev_hash`
+  de cada fila siguiente DEBE ser igual al `chain_hash` de la fila anterior.
+- `chain_hash` DEBE ser `SHA-256` sobre el orden de campos fijo
+  `prev_hash|seq|tenant_id|actor_user_id|action|entity_type|entity_id|payload|created_at`
+  donde `payload` es el JSON **canonicalizado** (decode → re-marshal) y
+  `created_at` está truncado a microsegundos (resolución de `timestamptz` de
+  Postgres) — el mismo code path exacto para insertar y verificar, sin drift.
+- La verificación de cadena (`VerifyChain`) DEBE ser interna: recalcular la
+  cadena desde todas las filas almacenadas y reportar el primer `seq` roto. Sin
+  endpoint público (alcance del slice 3).
+- Los appends de auditoría DEBEN ejecutarse dentro de `WithTenant` (de lo
+  contrario el RLS `FORCE` rechaza el insert) y DEBEN ser fail-open: un fallo de
+  auditoría nunca tumba el flujo principal, solo un WARN.
+- La PK de una sola columna `id` de `app.audit_log` es una desviación deliberada
+  de la regla 2.3: la tabla nunca es referenciada por una clave foránea, así que
+  el canal lateral de la PK compuesta no aplica.
+
+**Alternativas descartadas**
+- *Cadena global (una secuencia para todos los tenants)*: una sesión de tenant no
+  puede leer filas de otros tenants bajo RLS, así que el append se rompería;
+  además serializa a todos los tenants en una fila caliente y filtra el orden
+  cross-tenant.
+- *Trigger en la base que calcula el hash*: cero drift, pero lógica de seguridad
+  escondida en SQL de migración, no testeable en Go puro, y en contra de la
+  convención de mantener la lógica en los servicios.
+- *Hashear la fila SQL completa*: cualquier migración futura que agregue una
+  columna invalidaría toda la cadena.
+
+**Coste aceptado**
+- Una lectura indexada de cola + un insert por evento de auditoría (sync, en el
+  camino de escritura).
+- La verificación es O(n) — aceptable a volumen de portfolio, revisar si crece.
+- Los payloads deben mantenerse float64-safe para que la canonicalización sea
+  estable; el test de integración lo fija.
+
+---
+
+### 2.14 Rate limiting por ventana fija por ruta — Estado: Aceptada
+
+**Regla**
+- El rate limiting DEBE usar un modelo de **ventana fija** (no deslizante ni
+  token bucket): un script Lua atómico `INCR` + `PEXPIRE` sobre Redis, con un
+  gemelo en memoria por proceso (`map[string]*tokenBucket` + mutex) como
+  fallback cuando Redis no está disponible.
+- Redis NO DEBE ser una dependencia dura: un cliente nil o un error de Redis
+  falla **abierto** (permite la petición) con log WARN — un rate limiter sano
+  nunca se convierte en un DoS para usuarios legítimos.
+- Valores por defecto por ruta: `POST /api/v1/auth/login` 5/min por IP, `POST
+  /api/v1/auth/refresh` 30/min por IP, rutas API autenticadas (`/api/v1/lots`)
+  120/min por `tenant:user`.
+- Derivación de claves: rutas auth usan `rl:auth:{ip}` (puerto quitado); rutas
+  API usan `rl:api:{tenant}:{user}` desde los claims JWT, por lo que el
+  middleware DEBE correr DESPUÉS de `RequireAuth` en rutas protegidas. `/healthz`
+  siempre está exento.
+- Los límites superados DEBEN devolver `429` con cuerpo JSON `writeError` y
+  cabecera `Retry-After` (segundos, redondeo al alza).
+- El fallback en memoria solo es correcto para una **instancia única**; un
+  despliegue multi-instancia necesita Redis (o estado compartido) y queda fuera
+  de alcance para este slice.
+
+**Alternativas rechazadas**
+- *Ventana deslizante / token bucket con sorted sets*: más preciso, pero más Lua
+  y más claves por petición; la ventana fija coincide con el modelo de amenaza
+  a volumen de portfolio y es más simple de razonar.
+- *Fail-cerrado ante caída de Redis*: convertiría un parpadeo de Redis en un
+  corte de disponibilidad para cada llamada autenticada — inaceptable para una
+  API pública.
+- *Limitar solo por tenant*: un único usuario comprometido podría agotar la cuota
+  de todo el tenant; por `tenant:user` un actor malicioso no puede hacer DoS al
+  tenant.
+
+**Coste aceptado**
+- La ventana fija permite ráfagas en los bordes de la ventana (hasta 2× la tasa
+  en patrones patológicos) — aceptado por simplicidad; revisar si la API ve
+  ráfagas adversarias.
+- El fallback en memoria es estado por proceso: se pierde al reiniciar y es
+  incorrecto entre instancias — limitación documentada, correcta para la postura
+  de instancia única.
+
+---
+
+### 2.15 Detección de brechas — eventos con severidad, solo slog, sin alertas — Estado: Aceptada
+
+**Regla**
+- Los resultados relevantes a seguridad se clasifican con un clasificador puro
+  `Detect()` basado en tabla en eventos con exactamente tres severidades:
+  `info` | `warn` | `critical`, cada una mapeada al nivel slog del mismo nombre
+  (`critical` -> `ERROR` con `request_id`).
+- Cada evento se emite **siempre** a slog; un evento se convierte en fila de
+  `app.audit_log` **solo** cuando la petición tiene contexto de tenant
+  (`EmitAudit` y no anónima). Los eventos anónimos (fallos de login, rate
+  limits en rutas auth, replays de refresh sin claims) son solo slog — bajo RLS
+  no hay tenant que sea dueño de la fila.
+- El mapeo señal -> evento es una única fuente de verdad (`breachTable`):
+  replay de refresh -> `auth.refresh.replay` / critical / audit; rate limit
+  superado -> `security.rate_limit.exceeded` / warn / audit; login exitoso ->
+  `auth.login` / info / audit; refresh exitoso -> `auth.refresh` / info / audit;
+  fallo de login -> `auth.login.failed` / info / audit; sonda cross-tenant ->
+  `security.cross_tenant_probe` / warn / **sin** fila de audit.
+- Un replay de token **expirado** NO es una señal: los clientes reintentan de
+  forma rutinaria con tokens viejos, por lo que no produce evento.
+- La emisión es fail-open: un fallo de auditoría solo hace WARN-log, nunca
+  falla al llamador.
+- **Sin alertas por email/webhook/pager en este slice.** El slog severizado +
+  filas de audit son el sustrato; el enrutado de alertas es explícitamente
+  trabajo futuro.
+
+**Alternativas rechazadas**
+- *Alertas por email/webhook ahora*: introduce entrega, reintentos y manejo de
+  secretos que inflarían el slice 3; el sustrato slog+audit lo soporta más
+  tarde sin rehacer.
+- *Un único evento plano "sospechoso"*: destruye la capacidad del operador de
+  triage — un replay (robo) y una contraseña incorrecta (ruido) deben poder
+  distinguirse de un vistazo.
+- *Persistir eventos anónimos*: imposible bajo RLS (ningún tenant es dueño de
+  la fila) e innecesario — el stream slog los lleva con request ids.
+
+**Coste aceptado**
+- `breachTable` debe mantenerse pequeña y deliberada; cada señal nueva es un
+  punto de revisión.
+- Los operadores hacen triage del stream slog; no hay dashboard/alerta en este
+  slice.
+
 ---
 
 ## 3. Convenciones de código

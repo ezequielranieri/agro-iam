@@ -96,7 +96,16 @@ func run(log *slog.Logger) error {
 	refreshStore := auth.NewRefreshTokenStore(pool)
 	lotRepo := postgres.NewLotRepo(pool)
 
-	lotService := services.NewLotService(lotRepo)
+	// Audit: tamper-evident chained trail (slice 3). The repo runs every write
+	// inside WithTenant; the service is fail-open by contract.
+	auditRepo := postgres.NewAuditRepo(pool)
+	auditService := services.NewAuditService(auditRepo, log)
+
+	// Rate limiter: Redis-backed with in-memory fallback. rdb may be nil when
+	// Redis is unavailable — NewRateLimiter falls back per-process (fail-open).
+	rateLimiter := redis.NewRateLimiter(rdb, log)
+
+	lotService := services.NewLotService(lotRepo, auditService, log)
 
 	authService := services.NewAuthService(
 		userRepo,
@@ -104,13 +113,15 @@ func run(log *slog.Logger) error {
 		tokenManager,
 		auth.NewPasswordHasher(),
 		refreshStore,
+		auditService,
+		log,
 		accessTokenTTL,
 		refreshTokenTTL,
 	)
 
 	srv := &http.Server{
 		Addr:         cfg.httpAddr,
-		Handler:      apphttp.NewServer(authService, tokenManager, lotService, log).Routes(),
+		Handler:      apphttp.NewServer(authService, tokenManager, lotService, rateLimiter, auditService, log).Routes(),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 15 * time.Second,
 	}

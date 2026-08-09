@@ -5,39 +5,60 @@ package http
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/ezequielranieri/agro-iam/internal/application/ports"
+	"github.com/ezequielranieri/agro-iam/internal/application/services"
+	"github.com/ezequielranieri/agro-iam/internal/http/claims"
 	"github.com/ezequielranieri/agro-iam/internal/http/handlers"
+	"github.com/ezequielranieri/agro-iam/internal/infrastructure/redis"
+	"github.com/ezequielranieri/agro-iam/internal/requestid"
 )
 
 // Server bundles every dependency the HTTP layer needs.
 type Server struct {
-	auth   ports.AuthService
-	tokens ports.TokenManager
-	lots   ports.LotService
-	log    *slog.Logger
+	auth        ports.AuthService
+	tokens      ports.TokenManager
+	lots        ports.LotService
+	rateLimiter *redis.RateLimiter
+	audit       ports.AuditService
+	log         *slog.Logger
 }
 
 // NewServer builds the server with its dependencies.
-func NewServer(auth ports.AuthService, tokens ports.TokenManager, lots ports.LotService, log *slog.Logger) *Server {
-	return &Server{auth: auth, tokens: tokens, lots: lots, log: log}
+// rateLimiter may be nil (rate limiting disabled); audit may be nil (breach
+// emission fails open with a WARN).
+func NewServer(auth ports.AuthService, tokens ports.TokenManager, lots ports.LotService, rateLimiter *redis.RateLimiter, audit ports.AuditService, log *slog.Logger) *Server {
+	return &Server{auth: auth, tokens: tokens, lots: lots, rateLimiter: rateLimiter, audit: audit, log: log}
 }
 
 // Routes assembles the stdlib ServeMux. Path parameters use the Go 1.22
 // `{param}` syntax â€” no third-party router is needed. Health and auth routes
 // are public; lot routes are wrapped with s.requireAuth so the authenticated
 // tenant is always present in the request context before a handler runs.
+// Rate limiting is applied per-route: login 5/min/IP, refresh 30/min/IP,
+// lots 120/min/tenant:user (after auth).
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 
 	authHandler := handlers.NewAuthHandler(s.auth, s.log)
+
+	// Healthz: no rate limit (exempt in middleware)
 	mux.HandleFunc("GET /healthz", handlers.Health)
-	mux.HandleFunc("POST /api/v1/auth/login", authHandler.Login)
-	mux.HandleFunc("POST /api/v1/auth/refresh", authHandler.Refresh)
+
+	// Auth routes: rate limit per IP, BEFORE auth (public routes)
+	mux.Handle("POST /api/v1/auth/login",
+		s.rateLimit(5, time.Minute)(http.HandlerFunc(authHandler.Login)))
+	mux.Handle("POST /api/v1/auth/refresh",
+		s.rateLimit(30, time.Minute)(http.HandlerFunc(authHandler.Refresh)))
 
 	lotsHandler := handlers.NewLotsHandler(s.lots, s.log)
-	mux.Handle("GET /api/v1/lots", s.requireAuth(http.HandlerFunc(lotsHandler.List)))
-	mux.Handle("POST /api/v1/lots", s.requireAuth(http.HandlerFunc(lotsHandler.Create)))
+
+	// API routes: auth FIRST, then rate limit per tenant:user
+	mux.Handle("GET /api/v1/lots",
+		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(lotsHandler.List))))
+	mux.Handle("POST /api/v1/lots",
+		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(lotsHandler.Create))))
 
 	return s.chain(mux)
 }
@@ -45,6 +66,28 @@ func (s *Server) Routes() http.Handler {
 // requireAuth applies the JWT middleware bound to this server's token manager.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return RequireAuth(s.tokens)(next)
+}
+
+// rateLimit applies the rate-limit middleware bound to this server's limiter.
+// A nil limiter makes it a no-op (rate limiting disabled). On a 429 the
+// middleware emits the rate-limit-exceeded breach event (audit warn when the
+// request is authenticated, slog-only when anonymous).
+func (s *Server) rateLimit(limit int, window time.Duration) func(http.Handler) http.Handler {
+	return rateLimit(s.rateLimiter, limit, window, s.emitRateLimitExceeded)
+}
+
+// emitRateLimitExceeded classifies and emits the rate-limit breach event. The
+// 429 middleware runs after RequireAuth on protected routes, so authenticated
+// requests carry claims -> audit warn row; anonymous auth-route hits have no
+// tenant -> slog only (never an audit row under RLS).
+func (s *Server) emitRateLimitExceeded(r *http.Request) {
+	tenantID := claims.TenantIDFrom(r.Context())
+	userID := claims.UserIDFrom(r.Context())
+	anonymous := tenantID == ""
+
+	ev := services.Detect(services.SignalRateLimitExceeded, anonymous)
+	services.EmitEvent(r.Context(), s.log, s.audit, tenantID, userID, ev,
+		requestid.FromRequestID(r.Context()))
 }
 
 // chain applies global middleware so panics are caught and every log line is

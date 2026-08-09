@@ -84,6 +84,24 @@ type AuthSession struct {
 type LotService interface {
 	// ListByTenant returns every lot owned by the tenant.
 	ListByTenant(ctx context.Context, tenantID string) ([]*domain.Lot, error)
-	// Create validates and persists a new lot owned by the tenant.
-	Create(ctx context.Context, tenantID string, name string, areaHA float64, crop string) (*domain.Lot, error)
+	// Create validates and persists a new lot owned by the tenant. actorUserID
+	// is the authenticated user performing the action (from the JWT claims),
+	// recorded as the audit actor.
+	Create(ctx context.Context, tenantID, actorUserID, name string, areaHA float64, crop string) (*domain.Lot, error)
+}
+
+// AuditService is the use-case boundary for the tamper-evident audit trail.
+// Emitters (services and handlers) call Record after security-relevant events;
+// failures are WARN-logged and never fail the caller (fail-open).
+type AuditService interface {
+	// Record appends a chained entry for the tenant: it reads the tail, links
+	// the new entry to it (seq + prev_hash) and inserts. On a UNIQUE conflict
+	// (concurrent append) it retries once; on persistent failure it WARN-logs
+	// and returns the error — the caller proceeds regardless.
+	Record(ctx context.Context, tenantID, actorUserID, action, entityType, entityID string,
+		payload []byte, severity string) error
+	// VerifyChain recomputes the tenant's chain from all stored rows and
+	// returns the first broken seq (0 = intact). Internal only — there is no
+	// public endpoint.
+	VerifyChain(ctx context.Context, tenantID string) (int64, error)
 }

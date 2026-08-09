@@ -2,19 +2,16 @@ package http
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ezequielranieri/agro-iam/internal/application/ports"
 	"github.com/ezequielranieri/agro-iam/internal/http/claims"
+	"github.com/ezequielranieri/agro-iam/internal/infrastructure/redis"
+	"github.com/ezequielranieri/agro-iam/internal/requestid"
 )
-
-type ctxKey int
-
-const requestIDKey ctxKey = 0
 
 // logging wraps every request with a structured log line: method, path, status,
 // duration and a request id for correlation.
@@ -31,6 +28,7 @@ func (s *Server) logging(next http.Handler) http.Handler {
 			"status", sw.status,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"remote", r.RemoteAddr,
+			"request_id", requestid.FromRequestID(r.Context()),
 		)
 	})
 }
@@ -61,19 +59,10 @@ func (w *statusWriter) WriteHeader(code int) {
 }
 
 // requestIDContext returns a context carrying a fresh random request id, used
-// to correlate logs across a single request. Uses crypto/rand to stay within
-// the stdlib â€” no third-party UUID library.
+// to correlate logs and security events across a single request. Uses
+// crypto/rand via the shared requestid package — no third-party UUID library.
 func requestIDContext(parent context.Context) context.Context {
-	return context.WithValue(parent, requestIDKey, newRequestID())
-}
-
-// newRequestID returns a 32-char hex string from crypto/rand.
-func newRequestID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "unknown"
-	}
-	return hex.EncodeToString(b)
+	return requestid.WithRequestID(parent, requestid.NewID())
 }
 
 // RequireAuth guards a handler behind a valid `Authorization: Bearer <token>`
@@ -111,4 +100,104 @@ func bearerToken(header string) (string, bool) {
 		return "", false
 	}
 	return header[len(prefix):], true
+}
+
+// rateLimit returns middleware that enforces a fixed-window rate limit.
+// The key derivation depends on the route:
+//   - /healthz: exempt (no limit)
+//   - /api/v1/auth/login, /api/v1/auth/refresh: rl:auth:{ip} (strip port)
+//   - Authenticated API routes (after RequireAuth): rl:api:{tenant}:{user}
+// If limiter is nil, rate limiting is disabled (no-op).
+// onBlocked, when non-nil, is invoked with the request before the 429 is
+// written, so callers can emit breach events (the Server does this).
+func rateLimit(limiter *redis.RateLimiter, limit int, window time.Duration, onBlocked func(r *http.Request)) func(http.Handler) http.Handler {
+	if limiter == nil {
+		return func(next http.Handler) http.Handler {
+			return next
+		}
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Healthz is always exempt
+			if r.URL.Path == "/healthz" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			key := deriveRateLimitKey(r)
+			if key == "" {
+				// Should not happen for configured routes, but fail open
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			res := limiter.Allow(key, limit, window)
+			if !res.Allowed {
+				if onBlocked != nil {
+					onBlocked(r)
+				}
+				w.Header().Set("Retry-After", formatRetryAfter(res.RetryAfter))
+				writeError(w, http.StatusTooManyRequests, "rate limited")
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// deriveRateLimitKey returns the rate limit key for the request.
+// Returns empty string if the route is not configured for rate limiting.
+func deriveRateLimitKey(r *http.Request) string {
+	path := r.URL.Path
+	ip := stripPort(r.RemoteAddr)
+
+	// Auth routes: per-IP
+	if path == "/api/v1/auth/login" || path == "/api/v1/auth/refresh" {
+		return "rl:auth:" + ip
+	}
+
+	// Authenticated API routes: per tenant:user (claims injected by RequireAuth)
+	if strings.HasPrefix(path, "/api/v1/") {
+		tenantID := claims.TenantIDFrom(r.Context())
+		userID := claims.UserIDFrom(r.Context())
+		if tenantID != "" && userID != "" {
+			return "rl:api:" + tenantID + ":" + userID
+		}
+		// No claims yet (e.g., unauthenticated request to protected route) -
+		// RequireAuth will reject before rate limit runs, so this shouldn't happen.
+		// Fail open.
+		return ""
+	}
+
+	// Other routes: no rate limit configured
+	return ""
+}
+
+// stripPort removes the port from a "host:port" RemoteAddr.
+// IPv6 addresses in brackets are handled by splitting on the last ']:' or ':'.
+func stripPort(addr string) string {
+	// IPv6: [::1]:port or [2001:db8::1]:port
+	if strings.HasPrefix(addr, "[") {
+		if i := strings.LastIndex(addr, "]:"); i != -1 {
+			return addr[:i+1] // keep brackets
+		}
+		return addr
+	}
+	// IPv4: host:port
+	if i := strings.LastIndex(addr, ":"); i != -1 {
+		return addr[:i]
+	}
+	return addr
+}
+
+// formatRetryAfter formats a duration as seconds (ceiling) for the
+// Retry-After header. A zero/negative duration is treated as 1 second so the
+// header is always present on a 429.
+func formatRetryAfter(d time.Duration) string {
+	secs := int((d + time.Second - 1) / time.Second)
+	if secs <= 0 {
+		secs = 1
+	}
+	return strconv.Itoa(secs)
 }
