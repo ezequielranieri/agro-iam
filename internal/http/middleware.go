@@ -5,11 +5,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ezequielranieri/agro-iam/internal/application/ports"
 	"github.com/ezequielranieri/agro-iam/internal/http/claims"
+	"github.com/ezequielranieri/agro-iam/internal/infrastructure/redis"
 )
 
 type ctxKey int
@@ -111,4 +113,99 @@ func bearerToken(header string) (string, bool) {
 		return "", false
 	}
 	return header[len(prefix):], true
+}
+
+// rateLimit returns middleware that enforces a fixed-window rate limit.
+// The key derivation depends on the route:
+//   - /healthz: exempt (no limit)
+//   - /api/v1/auth/login, /api/v1/auth/refresh: rl:auth:{ip} (strip port)
+//   - Authenticated API routes (after RequireAuth): rl:api:{tenant}:{user}
+// If limiter is nil, rate limiting is disabled (no-op).
+func rateLimit(limiter *redis.RateLimiter, limit int, window time.Duration) func(http.Handler) http.Handler {
+	if limiter == nil {
+		return func(next http.Handler) http.Handler {
+			return next
+		}
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Healthz is always exempt
+			if r.URL.Path == "/healthz" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			key := deriveRateLimitKey(r)
+			if key == "" {
+				// Should not happen for configured routes, but fail open
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			res := limiter.Allow(key, limit, window)
+			if !res.Allowed {
+				w.Header().Set("Retry-After", formatRetryAfter(res.RetryAfter))
+				writeError(w, http.StatusTooManyRequests, "rate limited")
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// deriveRateLimitKey returns the rate limit key for the request.
+// Returns empty string if the route is not configured for rate limiting.
+func deriveRateLimitKey(r *http.Request) string {
+	path := r.URL.Path
+	ip := stripPort(r.RemoteAddr)
+
+	// Auth routes: per-IP
+	if path == "/api/v1/auth/login" || path == "/api/v1/auth/refresh" {
+		return "rl:auth:" + ip
+	}
+
+	// Authenticated API routes: per tenant:user (claims injected by RequireAuth)
+	if strings.HasPrefix(path, "/api/v1/") {
+		tenantID := claims.TenantIDFrom(r.Context())
+		userID := claims.UserIDFrom(r.Context())
+		if tenantID != "" && userID != "" {
+			return "rl:api:" + tenantID + ":" + userID
+		}
+		// No claims yet (e.g., unauthenticated request to protected route) -
+		// RequireAuth will reject before rate limit runs, so this shouldn't happen.
+		// Fail open.
+		return ""
+	}
+
+	// Other routes: no rate limit configured
+	return ""
+}
+
+// stripPort removes the port from a "host:port" RemoteAddr.
+// IPv6 addresses in brackets are handled by splitting on the last ']:' or ':'.
+func stripPort(addr string) string {
+	// IPv6: [::1]:port or [2001:db8::1]:port
+	if strings.HasPrefix(addr, "[") {
+		if i := strings.LastIndex(addr, "]:"); i != -1 {
+			return addr[:i+1] // keep brackets
+		}
+		return addr
+	}
+	// IPv4: host:port
+	if i := strings.LastIndex(addr, ":"); i != -1 {
+		return addr[:i]
+	}
+	return addr
+}
+
+// formatRetryAfter formats a duration as seconds (ceiling) for the
+// Retry-After header. A zero/negative duration is treated as 1 second so the
+// header is always present on a 429.
+func formatRetryAfter(d time.Duration) string {
+	secs := int((d + time.Second - 1) / time.Second)
+	if secs <= 0 {
+		secs = 1
+	}
+	return strconv.Itoa(secs)
 }

@@ -403,6 +403,45 @@ Status legend: `Accepted` = settled; `Open` = proposal, do not implement.
 
 ### 2.14 Per-route fixed-window rate limiting — Status: Accepted
 
+**Rule**
+- Rate limiting MUST use a **fixed-window** model (not sliding or token
+  bucket): one atomic `INCR` + `PEXPIRE` Lua script on Redis, with a
+  per-process in-memory twin (`map[string]*tokenBucket` + mutex) as the
+  fallback when Redis is unavailable.
+- Redis MUST NOT be a hard dependency: a nil client or a Redis error fails
+  **open** (allows the request) with a WARN log — a healthy rate limiter
+  never becomes a denial of service for legitimate users.
+- Defaults per route: `POST /api/v1/auth/login` 5/min per IP, `POST
+  /api/v1/auth/refresh` 30/min per IP, authenticated API routes (`/api/v1/lots`)
+  120/min per `tenant:user`.
+- Key derivation: auth routes use `rl:auth:{ip}` (port stripped); API routes
+  use `rl:api:{tenant}:{user}` from the JWT claims, so the middleware MUST run
+  AFTER `RequireAuth` on protected routes. `/healthz` is always exempt.
+- Exceeded limits MUST return `429` with a JSON `writeError` body and a
+  `Retry-After` header (ceiling seconds).
+- The in-memory fallback is correct only for a **single instance**; a
+  multi-instance deployment needs Redis (or shared state) and is out of scope
+  for this slice.
+
+**Alternatives rejected**
+- *Sliding window / token bucket via sorted sets*: more accurate, but more Lua
+  and more keys per request; fixed window matches the threat model at
+  portfolio volume and is simpler to reason about.
+- *Fail-closed on Redis outage*: would turn a Redis blip into an availability
+  outage for every authenticated call — unacceptable for a public API.
+- *Limiting by tenant only*: a single compromised user could exhaust the whole
+  tenant's quota; per-`tenant:user` keeps one bad actor from DoSing the
+  tenant.
+
+**Cost accepted**
+- Fixed window allows bursts at window edges (up to 2× rate in pathological
+  timing) — accepted for simplicity; revisit if the API sees adversarial
+  bursts.
+- In-memory fallback is per-process state: lost on restart and wrong across
+  instances — documented limitation, fine for the single-instance posture.
+
+---
+
 ## 3. Code conventions
 
 - **Domain is pure**: `internal/domain` imports nothing but the standard

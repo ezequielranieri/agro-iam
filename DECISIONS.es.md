@@ -431,6 +431,50 @@ implementar.
 
 ---
 
+### 2.14 Rate limiting por ventana fija por ruta — Estado: Aceptada
+
+**Regla**
+- El rate limiting DEBE usar un modelo de **ventana fija** (no deslizante ni
+  token bucket): un script Lua atómico `INCR` + `PEXPIRE` sobre Redis, con un
+  gemelo en memoria por proceso (`map[string]*tokenBucket` + mutex) como
+  fallback cuando Redis no está disponible.
+- Redis NO DEBE ser una dependencia dura: un cliente nil o un error de Redis
+  falla **abierto** (permite la petición) con log WARN — un rate limiter sano
+  nunca se convierte en un DoS para usuarios legítimos.
+- Valores por defecto por ruta: `POST /api/v1/auth/login` 5/min por IP, `POST
+  /api/v1/auth/refresh` 30/min por IP, rutas API autenticadas (`/api/v1/lots`)
+  120/min por `tenant:user`.
+- Derivación de claves: rutas auth usan `rl:auth:{ip}` (puerto quitado); rutas
+  API usan `rl:api:{tenant}:{user}` desde los claims JWT, por lo que el
+  middleware DEBE correr DESPUÉS de `RequireAuth` en rutas protegidas. `/healthz`
+  siempre está exento.
+- Los límites superados DEBEN devolver `429` con cuerpo JSON `writeError` y
+  cabecera `Retry-After` (segundos, redondeo al alza).
+- El fallback en memoria solo es correcto para una **instancia única**; un
+  despliegue multi-instancia necesita Redis (o estado compartido) y queda fuera
+  de alcance para este slice.
+
+**Alternativas rechazadas**
+- *Ventana deslizante / token bucket con sorted sets*: más preciso, pero más Lua
+  y más claves por petición; la ventana fija coincide con el modelo de amenaza
+  a volumen de portfolio y es más simple de razonar.
+- *Fail-cerrado ante caída de Redis*: convertiría un parpadeo de Redis en un
+  corte de disponibilidad para cada llamada autenticada — inaceptable para una
+  API pública.
+- *Limitar solo por tenant*: un único usuario comprometido podría agotar la cuota
+  de todo el tenant; por `tenant:user` un actor malicioso no puede hacer DoS al
+  tenant.
+
+**Coste aceptado**
+- La ventana fija permite ráfagas en los bordes de la ventana (hasta 2× la tasa
+  en patrones patológicos) — aceptado por simplicidad; revisar si la API ve
+  ráfagas adversarias.
+- El fallback en memoria es estado por proceso: se pierde al reiniciar y es
+  incorrecto entre instancias — limitación documentada, correcta para la postura
+  de instancia única.
+
+---
+
 ## 3. Convenciones de código
 
 - **El dominio es puro**: `internal/domain` no importa nada más que la biblioteca
