@@ -126,3 +126,32 @@ func EmitEvent(ctx context.Context, log *slog.Logger, audit ports.AuditService, 
 		log.Warn("audit emission failed (fail-open)", "action", ev.Action, "error", err)
 	}
 }
+
+// EmitSignal is the exported emit seam every caller (services and middleware)
+// uses: it classifies the signal, maps the result onto the port payload and
+// hands it to the sink. Detect runs inside so every caller gets the same
+// classification. A nil sink is a no-op; sink failures are informational
+// (fail-open, R4). It replaces EmitEvent at the emit sites (PR2); EmitEvent is
+// kept until the last callers switch over.
+func EmitSignal(ctx context.Context, sink ports.BreachSignalSink, signal Signal, anonymous bool, tenantID, actorID, requestID string) {
+	emitEvent(ctx, sink, tenantID, actorID, signal, anonymous, Detect(signal, anonymous), requestID)
+}
+
+// emitEvent is the internal single emission path: an already-classified Event
+// is mapped onto the port payload and delivered to the sink. A nil sink or nil
+// event is a no-op. The signal is informational (e.g. "" for the lot.create
+// raw event); the action drives the audit row.
+func emitEvent(ctx context.Context, sink ports.BreachSignalSink, tenantID, actorID string, signal Signal, anonymous bool, ev *Event, requestID string) {
+	if ev == nil || sink == nil {
+		return
+	}
+	_ = sink.Emit(ctx, ports.SignalEvent{
+		Signal:    string(signal),
+		Action:    ev.Action,
+		Severity:  ev.Severity,
+		TenantID:  tenantID,
+		ActorID:   actorID,
+		RequestID: requestID,
+		Anonymous: anonymous,
+	})
+}
