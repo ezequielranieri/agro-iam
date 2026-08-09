@@ -361,7 +361,47 @@ Status legend: `Accepted` = settled; `Open` = proposal, do not implement.
   everything.
 - Discipline is required to keep the layers honest as the codebase grows.
 
+### 2.13 Tamper-evident per-tenant audit chaining — Status: Accepted
+
+**Rule**
+- The audit trail MUST be **hash-chained per tenant**: every `app.audit_log` row
+  carries `seq`, `prev_hash` and `chain_hash` with `UNIQUE (tenant_id, seq)`.
+- The genesis entry uses `seq = 1` and `prev_hash` = 64 hex zeros; every
+  subsequent row's `prev_hash` MUST equal the previous row's `chain_hash`.
+- `chain_hash` MUST be `SHA-256` over the fixed field order
+  `prev_hash|seq|tenant_id|actor_user_id|action|entity_type|entity_id|payload|created_at`
+  where `payload` is the **canonicalized** JSON (decode → re-marshal), and
+  `created_at` is truncated to microsecond precision (Postgres `timestamptz`
+  resolution) — the exact same code path for insert and verify, so no drift.
+- Chain verification (`VerifyChain`) MUST be internal: recompute the chain from
+  all stored rows and report the first broken `seq`. No public endpoint (slice 3
+  scope).
+- Audit appends MUST run inside `WithTenant` (RLS `FORCE` would otherwise reject
+  the insert) and MUST be fail-open: an audit failure never fails the main flow,
+  only a WARN log.
+- The single-column `id` PK of `app.audit_log` is a deliberate deviation from
+  rule 2.3: the table is never referenced by a foreign key, so the composite-PK
+  side channel does not apply.
+
+**Alternatives rejected**
+- *Global chain (one sequence for all tenants)*: a tenant session cannot read
+  other tenants' rows under RLS, so the append would break; it also serializes
+  every tenant on one hot row and leaks cross-tenant ordering.
+- *Database trigger computing the hash*: zero drift, but security logic hidden in
+  migration SQL, untestable in pure Go, and against the convention of keeping
+  logic in services.
+- *Hashing the full SQL row*: any future migration adding a column would
+  invalidate the whole chain.
+
+**Cost accepted**
+- One indexed tail read + insert per audit event (sync, on the write path).
+- Verification is O(n) — fine at portfolio volume, revisit if it grows.
+- Payloads must stay float64-safe so canonicalization is stable; the integration
+  test pins this.
+
 ---
+
+### 2.14 Per-route fixed-window rate limiting — Status: Accepted
 
 ## 3. Code conventions
 

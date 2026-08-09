@@ -55,4 +55,11 @@ type ApplicationRepository interface {
 // delete â€” the audit log is append-only.
 type AuditRepository interface {
 	Append(ctx context.Context, entry *domain.AuditEntry) error
+	// Tail returns the newest chained entry (seq + chain_hash) for the tenant,
+	// or nil when the tenant has none. It reads inside a WithTenant transaction
+	// with FOR UPDATE to narrow concurrent-appends races.
+	Tail(ctx context.Context, tenantID string) (*domain.AuditEntry, error)
+	// ListByTenant returns every entry of the tenant ordered by seq ascending,
+	// used by chain verification.
+	ListByTenant(ctx context.Context, tenantID string) ([]*domain.AuditEntry, error)
 }

@@ -388,6 +388,47 @@ implementar.
 - Se requiere disciplina para mantener las capas honestas conforme crece el
   código.
 
+### 2.13 Hash-chaining de auditoría por tenant, a prueba de manipulación — Estado: Accepted
+
+**Regla**
+- El trail de auditoría DEBE estar **encadenado por hash por tenant**: cada fila
+  de `app.audit_log` lleva `seq`, `prev_hash` y `chain_hash` con
+  `UNIQUE (tenant_id, seq)`.
+- La entrada génesis usa `seq = 1` y `prev_hash` = 64 ceros hex; el `prev_hash`
+  de cada fila siguiente DEBE ser igual al `chain_hash` de la fila anterior.
+- `chain_hash` DEBE ser `SHA-256` sobre el orden de campos fijo
+  `prev_hash|seq|tenant_id|actor_user_id|action|entity_type|entity_id|payload|created_at`
+  donde `payload` es el JSON **canonicalizado** (decode → re-marshal) y
+  `created_at` está truncado a microsegundos (resolución de `timestamptz` de
+  Postgres) — el mismo code path exacto para insertar y verificar, sin drift.
+- La verificación de cadena (`VerifyChain`) DEBE ser interna: recalcular la
+  cadena desde todas las filas almacenadas y reportar el primer `seq` roto. Sin
+  endpoint público (alcance del slice 3).
+- Los appends de auditoría DEBEN ejecutarse dentro de `WithTenant` (de lo
+  contrario el RLS `FORCE` rechaza el insert) y DEBEN ser fail-open: un fallo de
+  auditoría nunca tumba el flujo principal, solo un WARN.
+- La PK de una sola columna `id` de `app.audit_log` es una desviación deliberada
+  de la regla 2.3: la tabla nunca es referenciada por una clave foránea, así que
+  el canal lateral de la PK compuesta no aplica.
+
+**Alternativas descartadas**
+- *Cadena global (una secuencia para todos los tenants)*: una sesión de tenant no
+  puede leer filas de otros tenants bajo RLS, así que el append se rompería;
+  además serializa a todos los tenants en una fila caliente y filtra el orden
+  cross-tenant.
+- *Trigger en la base que calcula el hash*: cero drift, pero lógica de seguridad
+  escondida en SQL de migración, no testeable en Go puro, y en contra de la
+  convención de mantener la lógica en los servicios.
+- *Hashear la fila SQL completa*: cualquier migración futura que agregue una
+  columna invalidaría toda la cadena.
+
+**Coste aceptado**
+- Una lectura indexada de cola + un insert por evento de auditoría (sync, en el
+  camino de escritura).
+- La verificación es O(n) — aceptable a volumen de portfolio, revisar si crece.
+- Los payloads deben mantenerse float64-safe para que la canonicalización sea
+  estable; el test de integración lo fija.
+
 ---
 
 ## 3. Convenciones de código
