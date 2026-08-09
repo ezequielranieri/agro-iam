@@ -31,20 +31,21 @@ application.
 │   router.go · middleware.go (slog, recover, request-id) · handlers   │
 └───────────────▲───────────────────────────────▲─────────────────────┘
                 │                               │
-   ports.AuthService                    ports.{User,Tenant,Lot,   }Repo
-                │                               │
+   ports.AuthService              ports.{User,Tenant,Lot,}Repo
+                │                    │ (outbound) BreachSignalSink
 ┌───────────────┴───────────────────────────────┴─────────────────────┐
 │                  Application layer (use cases)                     │
 │   services/auth_service.go — login, refresh (rotation + replay)     │
+│   services/breach.go — Detect() → severitized events → fan-out      │
 │   ports/repositories.go · ports/services.go   (DIP: depends on      │
 │                                                  interfaces only)   │
 └───────────────▲───────────────────────────────▲─────────────────────┘
                 │                               │
 ┌───────────────┴───────────────────────────────┴─────────────────────┐
 │                 Infrastructure layer (adapters)                    │
-│   postgres/*  (pgx, RLS tenant sessions)                            │
+│   postgres/*  (pgx, RLS tenant sessions, audit chain rows)          │
 │   auth/*      (JWT HS256 · Argon2id · refresh families)             │
-│   redis/      (go-redis client factory)                             │
+│   redis/      (rate-limit Lua INCR+PEXPIRE · go-redis factory)      │
 └─────────────────────────────────────────────────────────────────────┘
 
 Domain layer (internal/domain): pure entities + sentinel errors, ZERO
@@ -56,8 +57,8 @@ cmd/api (composition root)
 internal/
 ├── domain/           entities + domain errors (no external deps)
 ├── application/
-│   ├── ports/        interfaces the core depends on (DIP)
-│   └── services/     use cases: auth_service, refresh logic (pure)
+│   ├── ports/        interfaces the core depends on (DIP) — incl. BreachSignalSink
+│   └── services/     use cases: auth_service, breach.go (Detect + emit fan-out), sinks
 ├── infrastructure/   adapters: postgres, redis, auth (JWT/Argon2id/refresh)
 └── http/             stdlib ServeMux (Go 1.22 {params}), middleware, handlers
 migrations/           SQL schema + RLS + seed
@@ -105,6 +106,9 @@ CREATE POLICY tenant_isolation ON app.lots
 | Rotation | Every refresh revokes the old token, issues a successor in the same `family_id` |
 | Replay detection | Presenting an already-rotated (revoked + `replaced_by`) token revokes the **whole family** |
 | Tenant isolation | PostgreSQL RLS as described above |
+| Audit integrity | Append-only `app.audit_log` with per-tenant hash chaining (`seq`, `prev_hash`, `chain_hash`); `VerifyChain` detects tampering; security events carry a severity (info/warn/critical) |
+| Rate limiting | Per-route fixed-window counters — Redis Lua `INCR+PEXPIRE` with an in-memory fail-open fallback; `429 + Retry-After`; login 5/min/IP, refresh 30/min/IP, lots 120/min/tenant:user |
+| Breach signals | Table-driven `Detect()` classifies outcomes into severitized events emitted to slog + audit; outbound `ports.BreachSignalSink` fan-out for future consumers |
 
 ## Quickstart
 
@@ -147,20 +151,22 @@ Two tiers, both runnable with plain `go test` — no testcontainers, no testify:
 
 - **Unit tests** (`internal/application/services`, `internal/infrastructure/auth`,
   `internal/http`) need **no database**. `go test ./...` runs them anywhere.
-- **Integration tests** (`internal/infrastructure/postgres`) prove the RLS
-  isolation guarantee against a **real PostgreSQL**. They skip themselves unless
-  `TEST_DATABASE_URL` is set, so `go test ./...` stays green on a machine with no
-  database.
+- **Integration tests** (`internal/infrastructure/postgres`,
+  `internal/infrastructure/redis`) prove the RLS isolation guarantee against a
+  **real PostgreSQL** and the rate limiter against **real Redis**. They skip
+  themselves unless `TEST_DATABASE_URL` / `TEST_REDIS_ADDR` are set, so
+  `go test ./...` stays green on a machine with no database.
 
 ### Running the integration tests locally
 
 ```bash
-# 1. start postgres and create the dedicated test database
+# 1. start postgres + redis and create the dedicated test database
 make up
 make test-db          # docker compose exec -T db createdb -U agroiam agroiam_test
 
-# 2. run everything against the live DB
+# 2. run everything against the live DB + Redis
 TEST_DATABASE_URL=postgres://agroiam:agroiam@localhost:5432/agroiam_test?sslmode=disable \
+TEST_REDIS_ADDR=127.0.0.1:6379 \
   make test-integration
 ```
 
@@ -214,7 +220,8 @@ execute for real in CI — no `docker-compose` file involved.
 - [x] Slice 0 — skeleton: schema + RLS, repos, auth primitives, HTTP shell
 - [x] Slice 1 — JWT auth middleware, protected lot endpoints with real RLS isolation, tenant-context claims
 - [x] Slice 2 — RLS isolation integration tests against live PostgreSQL (dedicated non-superuser role) + GitHub Actions CI
-- [ ] Slice 3 — audit event emission with hash-chaining, Redis-backed rate limiting, breach detection / token-compromise alerting
+- [x] Slice 3 — audit event emission with hash-chaining, Redis-backed rate limiting, breach detection / token-compromise alerting
+- [x] M30 — outbound breach-signal sink port (`ports.BreachSignalSink`) so severitized signals can reach future consumers
 - [ ] Slice 4 — campaigns & applications CRUD over the RLS repos, user provisioning, RBAC enforcement
 - [ ] Slice 5 — demo frontend / deployed demo
 

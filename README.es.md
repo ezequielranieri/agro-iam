@@ -32,20 +32,21 @@ la aplicación.
 │   router.go · middleware.go (slog, recover, request-id) · handlers   │
 └───────────────▲───────────────────────────────▲─────────────────────┘
                 │                               │
-   ports.AuthService                    ports.{User,Tenant,Lot,   }Repo
-                │                               │
+   ports.AuthService              ports.{User,Tenant,Lot,}Repo
+                │                    │ (outbound) BreachSignalSink
 ┌───────────────┴───────────────────────────────┴─────────────────────┐
 │                  Application layer (use cases)                     │
 │   services/auth_service.go — login, refresh (rotation + replay)     │
+│   services/breach.go — Detect() → severitized events → fan-out      │
 │   ports/repositories.go · ports/services.go   (DIP: depends on      │
 │                                                  interfaces only)   │
 └───────────────▲───────────────────────────────▲─────────────────────┘
                 │                               │
 ┌───────────────┴───────────────────────────────┴─────────────────────┐
 │                 Infrastructure layer (adapters)                    │
-│   postgres/*  (pgx, RLS tenant sessions)                            │
+│   postgres/*  (pgx, RLS tenant sessions, audit chain rows)          │
 │   auth/*      (JWT HS256 · Argon2id · refresh families)             │
-│   redis/      (go-redis client factory)                             │
+│   redis/      (rate-limit Lua INCR+PEXPIRE · go-redis factory)      │
 └─────────────────────────────────────────────────────────────────────┘
 
 Domain layer (internal/domain): pure entities + sentinel errors, ZERO
@@ -57,8 +58,8 @@ cmd/api (composition root)
 internal/
 ├── domain/           entities + domain errors (no external deps)
 ├── application/
-│   ├── ports/        interfaces the core depends on (DIP)
-│   └── services/     use cases: auth_service, refresh logic (pure)
+│   ├── ports/        interfaces the core depends on (DIP) — incl. BreachSignalSink
+│   └── services/     use cases: auth_service, breach.go (Detect + emit fan-out), sinks
 ├── infrastructure/   adapters: postgres, redis, auth (JWT/Argon2id/refresh)
 └── http/             stdlib ServeMux (Go 1.22 {params}), middleware, handlers
 migrations/           SQL schema + RLS + seed
@@ -105,6 +106,9 @@ CREATE POLICY tenant_isolation ON app.lots
 | Rotación | Cada refresh revoca el token anterior y emite un sucesor en la misma `family_id` |
 | Detección de replay | Presentar un token ya rotado (revocado con `replaced_by`) revoca **toda la familia** |
 | Aislamiento de tenant | PostgreSQL RLS como se describió antes |
+| Integridad de auditoría | `app.audit_log` de solo apéndice con encadenamiento por hash por tenant (`seq`, `prev_hash`, `chain_hash`); `VerifyChain` detecta manipulación; los eventos de seguridad llevan severidad (info/warn/critical) |
+| Limitación de tasa | Contadores de ventana fija por ruta — Lua `INCR+PEXPIRE` en Redis con fallback fail-open en memoria; `429 + Retry-After`; login 5/min/IP, refresh 30/min/IP, lots 120/min/tenant:user |
+| Señales de brecha | `Detect()` dirigido por tabla clasifica los resultados en eventos con severidad emitidos a slog + auditoría; fan-out de salida `ports.BreachSignalSink` para consumidores futuros |
 
 ## Inicio rápido
 
@@ -148,20 +152,22 @@ Dos niveles, ambos ejecutables con `go test` puro — sin testcontainers, sin te
 - **Pruebas unitarias** (`internal/application/services`, `internal/infrastructure/auth`,
   `internal/http`) no necesitan **base de datos**. `go test ./...` las ejecuta en cualquier
   máquina.
-- **Pruebas de integración** (`internal/infrastructure/postgres`) verifican la garantía de
-  aislamiento RLS contra un **PostgreSQL real**. Se omiten a sí mismas salvo que
-  `TEST_DATABASE_URL` esté definida, de modo que `go test ./...` sigue en verde en una
-  máquina sin base de datos.
+- **Pruebas de integración** (`internal/infrastructure/postgres`,
+  `internal/infrastructure/redis`) verifican la garantía de aislamiento RLS contra un
+  **PostgreSQL real** y el limitador de tasa contra **Redis real**. Se omiten a sí mismas
+  salvo que `TEST_DATABASE_URL` / `TEST_REDIS_ADDR` estén definidas, de modo que
+  `go test ./...` sigue en verde en una máquina sin base de datos.
 
 ### Ejecutar las pruebas de integración localmente
 
 ```bash
-# 1. start postgres and create the dedicated test database
+# 1. start postgres + redis and create the dedicated test database
 make up
 make test-db          # docker compose exec -T db createdb -U agroiam agroiam_test
 
-# 2. run everything against the live DB
+# 2. run everything against the live DB + Redis
 TEST_DATABASE_URL=postgres://agroiam:agroiam@localhost:5432/agroiam_test?sslmode=disable \
+TEST_REDIS_ADDR=127.0.0.1:6379 \
   make test-integration
 ```
 
@@ -215,7 +221,8 @@ integración de RLS se ejecutan de verdad en CI — sin archivo `docker-compose`
 - [x] Slice 0 — esqueleto: esquema + RLS, repos, primitivas de auth, carcasa HTTP
 - [x] Slice 1 — middleware de auth JWT, endpoints de lotes protegidos con aislamiento RLS real, claims de contexto de tenant
 - [x] Slice 2 — pruebas de integración del aislamiento RLS contra PostgreSQL real (rol dedicado sin superusuario) + CI en GitHub Actions
-- [ ] Slice 3 — emisión de eventos de auditoría con encadenamiento por hash, limitación de tasa respaldada por Redis, detección de brechas / alertas de compromiso de tokens
+- [x] Slice 3 — emisión de eventos de auditoría con encadenamiento por hash, limitación de tasa respaldada por Redis, detección de brechas / alertas de compromiso de tokens
+- [x] M30 — port de salida de señales de brecha (`ports.BreachSignalSink`) para que las señales con severidad puedan llegar a consumidores futuros
 - [ ] Slice 4 — CRUD de campañas y aplicaciones sobre los repos RLS, aprovisionamiento de usuarios, aplicación de RBAC
 - [ ] Slice 5 — frontend de demostración / demo desplegada
 
