@@ -90,7 +90,7 @@ func (h *LotsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lot, err := h.lots.Create(r.Context(), tenantID, req.Name, req.AreaHA, req.Crop)
+	lot, err := h.lots.Create(r.Context(), tenantID, claims.UserIDFrom(r.Context()), req.Name, req.AreaHA, req.Crop)
 	if errors.Is(err, domain.ErrInvalidInput) {
 		writeError(w, http.StatusBadRequest, "invalid input")
 		return

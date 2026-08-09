@@ -37,9 +37,9 @@ func (f *fakeLotRepo) Create(ctx context.Context, lot *domain.Lot) error {
 
 func TestLotServiceCreateHappyPath(t *testing.T) {
 	repo := &fakeLotRepo{}
-	svc := NewLotService(repo)
+	svc := NewLotService(repo, nil, nil)
 
-	lot, err := svc.Create(context.Background(), "tenant-1", "Campo Norte", 12.5, "soy")
+	lot, err := svc.Create(context.Background(), "tenant-1", "actor-1", "Campo Norte", 12.5, "soy")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestLotServiceCreateHappyPath(t *testing.T) {
 
 func TestLotServiceCreateRejectsInvalidInput(t *testing.T) {
 	repo := &fakeLotRepo{}
-	svc := NewLotService(repo)
+	svc := NewLotService(repo, nil, nil)
 
 	cases := []struct {
 		label  string
@@ -79,7 +79,7 @@ func TestLotServiceCreateRejectsInvalidInput(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.label, func(t *testing.T) {
-			_, err := svc.Create(context.Background(), c.tenant, c.name, c.area, "soy")
+			_, err := svc.Create(context.Background(), c.tenant, "actor-1", c.name, c.area, "soy")
 			if !errors.Is(err, domain.ErrInvalidInput) {
 				t.Fatalf("Create error = %v, want ErrInvalidInput", err)
 			}
@@ -94,7 +94,7 @@ func TestLotServiceCreateRejectsInvalidInput(t *testing.T) {
 func TestLotServiceListByTenant(t *testing.T) {
 	want := []*domain.Lot{{ID: "lot-1", TenantID: "tenant-1", Name: "Campo Norte"}}
 	repo := &fakeLotRepo{list: want}
-	svc := NewLotService(repo)
+	svc := NewLotService(repo, nil, nil)
 
 	got, err := svc.ListByTenant(context.Background(), "tenant-1")
 	if err != nil {

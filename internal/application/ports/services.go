@@ -84,8 +84,10 @@ type AuthSession struct {
 type LotService interface {
 	// ListByTenant returns every lot owned by the tenant.
 	ListByTenant(ctx context.Context, tenantID string) ([]*domain.Lot, error)
-	// Create validates and persists a new lot owned by the tenant.
-	Create(ctx context.Context, tenantID string, name string, areaHA float64, crop string) (*domain.Lot, error)
+	// Create validates and persists a new lot owned by the tenant. actorUserID
+	// is the authenticated user performing the action (from the JWT claims),
+	// recorded as the audit actor.
+	Create(ctx context.Context, tenantID, actorUserID, name string, areaHA float64, crop string) (*domain.Lot, error)
 }
 
 // AuditService is the use-case boundary for the tamper-evident audit trail.

@@ -475,6 +475,50 @@ implementar.
 
 ---
 
+### 2.15 Detección de brechas — eventos con severidad, solo slog, sin alertas — Estado: Aceptada
+
+**Regla**
+- Los resultados relevantes a seguridad se clasifican con un clasificador puro
+  `Detect()` basado en tabla en eventos con exactamente tres severidades:
+  `info` | `warn` | `critical`, cada una mapeada al nivel slog del mismo nombre
+  (`critical` -> `ERROR` con `request_id`).
+- Cada evento se emite **siempre** a slog; un evento se convierte en fila de
+  `app.audit_log` **solo** cuando la petición tiene contexto de tenant
+  (`EmitAudit` y no anónima). Los eventos anónimos (fallos de login, rate
+  limits en rutas auth, replays de refresh sin claims) son solo slog — bajo RLS
+  no hay tenant que sea dueño de la fila.
+- El mapeo señal -> evento es una única fuente de verdad (`breachTable`):
+  replay de refresh -> `auth.refresh.replay` / critical / audit; rate limit
+  superado -> `security.rate_limit.exceeded` / warn / audit; login exitoso ->
+  `auth.login` / info / audit; refresh exitoso -> `auth.refresh` / info / audit;
+  fallo de login -> `auth.login.failed` / info / audit; sonda cross-tenant ->
+  `security.cross_tenant_probe` / warn / **sin** fila de audit.
+- Un replay de token **expirado** NO es una señal: los clientes reintentan de
+  forma rutinaria con tokens viejos, por lo que no produce evento.
+- La emisión es fail-open: un fallo de auditoría solo hace WARN-log, nunca
+  falla al llamador.
+- **Sin alertas por email/webhook/pager en este slice.** El slog severizado +
+  filas de audit son el sustrato; el enrutado de alertas es explícitamente
+  trabajo futuro.
+
+**Alternativas rechazadas**
+- *Alertas por email/webhook ahora*: introduce entrega, reintentos y manejo de
+  secretos que inflarían el slice 3; el sustrato slog+audit lo soporta más
+  tarde sin rehacer.
+- *Un único evento plano "sospechoso"*: destruye la capacidad del operador de
+  triage — un replay (robo) y una contraseña incorrecta (ruido) deben poder
+  distinguirse de un vistazo.
+- *Persistir eventos anónimos*: imposible bajo RLS (ningún tenant es dueño de
+  la fila) e innecesario — el stream slog los lleva con request ids.
+
+**Coste aceptado**
+- `breachTable` debe mantenerse pequeña y deliberada; cada señal nueva es un
+  punto de revisión.
+- Los operadores hacen triage del stream slog; no hay dashboard/alerta en este
+  slice.
+
+---
+
 ## 3. Convenciones de código
 
 - **El dominio es puro**: `internal/domain` no importa nada más que la biblioteca

@@ -442,6 +442,47 @@ Status legend: `Accepted` = settled; `Open` = proposal, do not implement.
 
 ---
 
+### 2.15 Breach detection — severitized events, slog only, no alerting — Status: Accepted
+
+**Rule**
+- Security-relevant outcomes are classified by a pure, table-driven `Detect()`
+  classifier into events with exactly three severities: `info` | `warn` |
+  `critical`, each mapped to the same-named slog level (`critical` -> `ERROR`
+  with `request_id`).
+- Every event is **always** emitted to slog; an event becomes an `app.audit_log`
+  row **only** when the request has tenant context (`EmitAudit` and non-anonymous).
+  Anonymous events (login failures, auth-route rate limits, refresh replays
+  without claims) are slog-only — under RLS there is no tenant to own the row.
+- Signal -> event mapping is a single source of truth (`breachTable`):
+  refresh-token replay -> `auth.refresh.replay` / critical / audit; rate-limit
+  exceeded -> `security.rate_limit.exceeded` / warn / audit; login success ->
+  `auth.login` / info / audit; refresh success -> `auth.refresh` / info / audit;
+  login failure -> `auth.login.failed` / info / audit; cross-tenant probe ->
+  `security.cross_tenant_probe` / warn / **no** audit row.
+- An **expired** token replay is NOT a signal: clients routinely retry with
+  stale tokens, so it produces no event.
+- Emission is fail-open: an audit failure only WARN-logs, never fails the
+  caller.
+- **No email/webhook/pager alerting in this slice.** Severitized slog + audit
+  rows are the substrate; alert routing is explicitly future work.
+
+**Alternatives rejected**
+- *Email/webhook alerting now*: introduces delivery, retry and secret-handling
+  concerns that would balloon slice 3; the slog+audit substrate supports it
+  later without rework.
+- *One flat "suspicious" event*: destroys the operator's ability to triage —
+  a replay (theft) and a wrong password (noise) must be distinguishable at a
+  glance.
+- *Persisting anonymous events*: impossible under RLS (no tenant owns the row)
+  and unnecessary — the slog stream carries them with request ids.
+
+**Cost accepted**
+- The `breachTable` must stay small and deliberate; every new signal is a
+  review point.
+- Operators triage the slog stream; there is no dashboard/alert in this slice.
+
+---
+
 ## 3. Code conventions
 
 - **Domain is pure**: `internal/domain` imports nothing but the standard

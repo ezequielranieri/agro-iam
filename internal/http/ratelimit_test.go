@@ -35,7 +35,7 @@ func TestRateLimit_HealthzExempt(t *testing.T) {
 		req.RemoteAddr = "127.0.0.1:12345"
 		rec := httptest.NewRecorder()
 
-		rateLimit(limiter, 1, time.Minute)(stub).ServeHTTP(rec, req)
+		rateLimit(limiter, 1, time.Minute, nil)(stub).ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("request %d: healthz status = %d, want 200", i+1, rec.Code)
@@ -52,7 +52,7 @@ func TestRateLimit_AuthRouteLogin(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := rateLimit(limiter, 5, time.Minute)(stub)
+	handler := rateLimit(limiter, 5, time.Minute, nil)(stub)
 
 	// First 5 allowed
 	for i := 0; i < 5; i++ {
@@ -92,7 +92,7 @@ func TestRateLimit_AuthRouteRefresh(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := rateLimit(limiter, 30, time.Minute)(stub)
+	handler := rateLimit(limiter, 30, time.Minute, nil)(stub)
 
 	// First 30 allowed
 	for i := 0; i < 30; i++ {
@@ -129,7 +129,7 @@ func TestRateLimit_APIRoute(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := rateLimit(limiter, 120, time.Minute)(stub)
+	handler := rateLimit(limiter, 120, time.Minute, nil)(stub)
 
 	// Simulate authenticated context with claims
 	ctx := claims.WithIdentity(
@@ -173,7 +173,7 @@ func TestRateLimit_KeyDerivation_stripPort(t *testing.T) {
 	stub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := rateLimit(limiter, 2, time.Minute)(stub)
+	handler := rateLimit(limiter, 2, time.Minute, nil)(stub)
 
 	// Same IP, different ports = same key (port stripped)
 	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
@@ -208,7 +208,7 @@ func TestRateLimit_KeyDerivation_authRateKey(t *testing.T) {
 	stub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := rateLimit(limiter, 1, time.Minute)(stub)
+	handler := rateLimit(limiter, 1, time.Minute, nil)(stub)
 
 	// First request allowed
 	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
@@ -238,7 +238,7 @@ func TestRateLimit_KeyDerivation_apiRateKey(t *testing.T) {
 	stub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := rateLimit(limiter, 1, time.Minute)(stub)
+	handler := rateLimit(limiter, 1, time.Minute, nil)(stub)
 
 	ctx := claims.WithIdentity(context.Background(), "user-A", "tenant-X", "admin")
 
@@ -282,7 +282,7 @@ func TestRateLimit_PerRouteAfterRequireAuth(t *testing.T) {
 
 	// Build a mini router: auth -> rate limit -> handler
 	authHandler := RequireAuth(tm)
-	rateHandler := rateLimit(limiter, 100, time.Minute)
+	rateHandler := rateLimit(limiter, 100, time.Minute, nil)
 
 	stub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -310,7 +310,7 @@ func TestRateLimit_Concurrency(t *testing.T) {
 	stub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := rateLimit(limiter, 100, time.Minute)(stub)
+	handler := rateLimit(limiter, 100, time.Minute, nil)(stub)
 
 	const goroutines = 150
 	var wg sync.WaitGroup

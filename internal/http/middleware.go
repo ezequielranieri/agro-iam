@@ -2,8 +2,6 @@ package http
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,11 +10,8 @@ import (
 	"github.com/ezequielranieri/agro-iam/internal/application/ports"
 	"github.com/ezequielranieri/agro-iam/internal/http/claims"
 	"github.com/ezequielranieri/agro-iam/internal/infrastructure/redis"
+	"github.com/ezequielranieri/agro-iam/internal/requestid"
 )
-
-type ctxKey int
-
-const requestIDKey ctxKey = 0
 
 // logging wraps every request with a structured log line: method, path, status,
 // duration and a request id for correlation.
@@ -33,6 +28,7 @@ func (s *Server) logging(next http.Handler) http.Handler {
 			"status", sw.status,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"remote", r.RemoteAddr,
+			"request_id", requestid.FromRequestID(r.Context()),
 		)
 	})
 }
@@ -63,19 +59,10 @@ func (w *statusWriter) WriteHeader(code int) {
 }
 
 // requestIDContext returns a context carrying a fresh random request id, used
-// to correlate logs across a single request. Uses crypto/rand to stay within
-// the stdlib â€” no third-party UUID library.
+// to correlate logs and security events across a single request. Uses
+// crypto/rand via the shared requestid package — no third-party UUID library.
 func requestIDContext(parent context.Context) context.Context {
-	return context.WithValue(parent, requestIDKey, newRequestID())
-}
-
-// newRequestID returns a 32-char hex string from crypto/rand.
-func newRequestID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "unknown"
-	}
-	return hex.EncodeToString(b)
+	return requestid.WithRequestID(parent, requestid.NewID())
 }
 
 // RequireAuth guards a handler behind a valid `Authorization: Bearer <token>`
@@ -121,7 +108,9 @@ func bearerToken(header string) (string, bool) {
 //   - /api/v1/auth/login, /api/v1/auth/refresh: rl:auth:{ip} (strip port)
 //   - Authenticated API routes (after RequireAuth): rl:api:{tenant}:{user}
 // If limiter is nil, rate limiting is disabled (no-op).
-func rateLimit(limiter *redis.RateLimiter, limit int, window time.Duration) func(http.Handler) http.Handler {
+// onBlocked, when non-nil, is invoked with the request before the 429 is
+// written, so callers can emit breach events (the Server does this).
+func rateLimit(limiter *redis.RateLimiter, limit int, window time.Duration, onBlocked func(r *http.Request)) func(http.Handler) http.Handler {
 	if limiter == nil {
 		return func(next http.Handler) http.Handler {
 			return next
@@ -144,6 +133,9 @@ func rateLimit(limiter *redis.RateLimiter, limit int, window time.Duration) func
 
 			res := limiter.Allow(key, limit, window)
 			if !res.Allowed {
+				if onBlocked != nil {
+					onBlocked(r)
+				}
 				w.Header().Set("Retry-After", formatRetryAfter(res.RetryAfter))
 				writeError(w, http.StatusTooManyRequests, "rate limited")
 				return
