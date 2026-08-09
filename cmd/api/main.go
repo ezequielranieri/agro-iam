@@ -105,7 +105,14 @@ func run(log *slog.Logger) error {
 	// Redis is unavailable — NewRateLimiter falls back per-process (fail-open).
 	rateLimiter := redis.NewRateLimiter(rdb, log)
 
-	lotService := services.NewLotService(lotRepo, auditService, log)
+	// Breach signals (DECISIONS 2.15): slog is ALWAYS registered, then audit.
+	// The fan-out is the single emission path shared by every service and the
+	// middleware (R2/R3). Order = registration: slog first, audit second.
+	slogSink := services.NewSlogSink(log)
+	auditSink := services.NewAuditSink(auditService, log)
+	signals := services.NewFanOut(log, slogSink, auditSink)
+
+	lotService := services.NewLotService(lotRepo, signals)
 
 	authService := services.NewAuthService(
 		userRepo,
@@ -113,15 +120,14 @@ func run(log *slog.Logger) error {
 		tokenManager,
 		auth.NewPasswordHasher(),
 		refreshStore,
-		auditService,
-		log,
+		signals,
 		accessTokenTTL,
 		refreshTokenTTL,
 	)
 
 	srv := &http.Server{
 		Addr:         cfg.httpAddr,
-		Handler:      apphttp.NewServer(authService, tokenManager, lotService, rateLimiter, auditService, log).Routes(),
+		Handler:      apphttp.NewServer(authService, tokenManager, lotService, rateLimiter, signals, log).Routes(),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 15 * time.Second,
 	}

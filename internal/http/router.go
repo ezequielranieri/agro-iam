@@ -21,15 +21,15 @@ type Server struct {
 	tokens      ports.TokenManager
 	lots        ports.LotService
 	rateLimiter *redis.RateLimiter
-	audit       ports.AuditService
+	signals     ports.BreachSignalSink
 	log         *slog.Logger
 }
 
 // NewServer builds the server with its dependencies.
-// rateLimiter may be nil (rate limiting disabled); audit may be nil (breach
-// emission fails open with a WARN).
-func NewServer(auth ports.AuthService, tokens ports.TokenManager, lots ports.LotService, rateLimiter *redis.RateLimiter, audit ports.AuditService, log *slog.Logger) *Server {
-	return &Server{auth: auth, tokens: tokens, lots: lots, rateLimiter: rateLimiter, audit: audit, log: log}
+// rateLimiter may be nil (rate limiting disabled); signals may be nil (breach
+// emission is a no-op).
+func NewServer(auth ports.AuthService, tokens ports.TokenManager, lots ports.LotService, rateLimiter *redis.RateLimiter, signals ports.BreachSignalSink, log *slog.Logger) *Server {
+	return &Server{auth: auth, tokens: tokens, lots: lots, rateLimiter: rateLimiter, signals: signals, log: log}
 }
 
 // Routes assembles the stdlib ServeMux. Path parameters use the Go 1.22
@@ -76,18 +76,18 @@ func (s *Server) rateLimit(limit int, window time.Duration) func(http.Handler) h
 	return rateLimit(s.rateLimiter, limit, window, s.emitRateLimitExceeded)
 }
 
-// emitRateLimitExceeded classifies and emits the rate-limit breach event. The
-// 429 middleware runs after RequireAuth on protected routes, so authenticated
-// requests carry claims -> audit warn row; anonymous auth-route hits have no
-// tenant -> slog only (never an audit row under RLS).
+// emitRateLimitExceeded emits the rate-limit breach signal through the same
+// sink the services use — ONE emission path (R3). The 429 middleware runs
+// after RequireAuth on protected routes, so authenticated requests carry
+// claims -> tenant; anonymous auth-route hits have no tenant -> Anonymous=true
+// so the audit sink skips the row (slog-only under RLS).
 func (s *Server) emitRateLimitExceeded(r *http.Request) {
 	tenantID := claims.TenantIDFrom(r.Context())
 	userID := claims.UserIDFrom(r.Context())
 	anonymous := tenantID == ""
 
-	ev := services.Detect(services.SignalRateLimitExceeded, anonymous)
-	services.EmitEvent(r.Context(), s.log, s.audit, tenantID, userID, ev,
-		requestid.FromRequestID(r.Context()))
+	services.EmitSignal(r.Context(), s.signals, services.SignalRateLimitExceeded, anonymous,
+		tenantID, userID, requestid.FromRequestID(r.Context()))
 }
 
 // chain applies global middleware so panics are caught and every log line is

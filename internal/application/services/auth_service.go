@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/ezequielranieri/agro-iam/internal/application/ports"
@@ -21,38 +20,32 @@ type authService struct {
 	tokens        ports.TokenManager
 	hasher        ports.PasswordHasher
 	refreshTokens ports.RefreshTokenRepository
-	audit         ports.AuditService
-	log           *slog.Logger
+	signals       ports.BreachSignalSink
 	accessTTL     time.Duration
 	refreshTTL    time.Duration
 	now           func() time.Time
 }
 
-// NewAuthService wires the concrete ports into an AuthService. audit may be nil
-// (emitters fail open with a WARN) and log may be nil (discarded). timeSource
-// is injectable for deterministic tests; pass time.Now when unsure.
+// NewAuthService wires the concrete ports into an AuthService. signals may be
+// nil (emission is a no-op). timeSource is injectable for deterministic tests;
+// pass time.Now when unsure.
 func NewAuthService(
 	users ports.UserRepository,
 	tenants ports.TenantRepository,
 	tokens ports.TokenManager,
 	hasher ports.PasswordHasher,
 	refreshTokens ports.RefreshTokenRepository,
-	audit ports.AuditService,
-	log *slog.Logger,
+	signals ports.BreachSignalSink,
 	accessTTL time.Duration,
 	refreshTTL time.Duration,
 ) ports.AuthService {
-	if log == nil {
-		log = slog.New(slog.DiscardHandler)
-	}
 	return &authService{
 		users:         users,
 		tenants:       tenants,
 		tokens:        tokens,
 		hasher:        hasher,
 		refreshTokens: refreshTokens,
-		audit:         audit,
-		log:           log,
+		signals:       signals,
 		accessTTL:     accessTTL,
 		refreshTTL:    refreshTTL,
 		now:           time.Now,
@@ -104,7 +97,7 @@ func (s *authService) Login(ctx context.Context, tenantID, email, password strin
 
 	// Emit the audit event for a successful login (info). Fail-open: an audit
 	// error never fails the login.
-	EmitEvent(ctx, s.log, s.audit, user.TenantID, user.ID, Detect(SignalLoginSuccess, false), "")
+	EmitSignal(ctx, s.signals, SignalLoginSuccess, false, user.TenantID, user.ID, "")
 
 	return &ports.AuthSession{
 		AccessToken:  access,
@@ -146,8 +139,8 @@ func (s *authService) Refresh(ctx context.Context, refreshToken string) (*ports.
 		if err := s.refreshTokens.RevokeFamily(ctx, record.FamilyID); err != nil {
 			return nil, fmt.Errorf("revoke family: %w", err)
 		}
-		EmitEvent(ctx, s.log, s.audit, record.TenantID, record.UserID,
-			Detect(SignalRefreshReplay, false), requestid.FromRequestID(ctx))
+		EmitSignal(ctx, s.signals, SignalRefreshReplay, false, record.TenantID, record.UserID,
+			requestid.FromRequestID(ctx))
 		return nil, domain.ErrUnauthorized
 
 	case RotationRejectExpired:
@@ -186,8 +179,8 @@ func (s *authService) Refresh(ctx context.Context, refreshToken string) (*ports.
 		}
 
 		// Emit the audit event for a successful rotation (info). Fail-open.
-		EmitEvent(ctx, s.log, s.audit, record.TenantID, record.UserID,
-			Detect(SignalRefreshSuccess, false), requestid.FromRequestID(ctx))
+		EmitSignal(ctx, s.signals, SignalRefreshSuccess, false, record.TenantID, record.UserID,
+			requestid.FromRequestID(ctx))
 
 		return &ports.AuthSession{
 			AccessToken:  access,

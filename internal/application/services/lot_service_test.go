@@ -37,7 +37,7 @@ func (f *fakeLotRepo) Create(ctx context.Context, lot *domain.Lot) error {
 
 func TestLotServiceCreateHappyPath(t *testing.T) {
 	repo := &fakeLotRepo{}
-	svc := NewLotService(repo, nil, nil)
+	svc := NewLotService(repo, nil)
 
 	lot, err := svc.Create(context.Background(), "tenant-1", "actor-1", "Campo Norte", 12.5, "soy")
 	if err != nil {
@@ -66,7 +66,7 @@ func TestLotServiceCreateHappyPath(t *testing.T) {
 
 func TestLotServiceCreateRejectsInvalidInput(t *testing.T) {
 	repo := &fakeLotRepo{}
-	svc := NewLotService(repo, nil, nil)
+	svc := NewLotService(repo, nil)
 
 	cases := []struct {
 		label  string
@@ -94,7 +94,7 @@ func TestLotServiceCreateRejectsInvalidInput(t *testing.T) {
 func TestLotServiceListByTenant(t *testing.T) {
 	want := []*domain.Lot{{ID: "lot-1", TenantID: "tenant-1", Name: "Campo Norte"}}
 	repo := &fakeLotRepo{list: want}
-	svc := NewLotService(repo, nil, nil)
+	svc := NewLotService(repo, nil)
 
 	got, err := svc.ListByTenant(context.Background(), "tenant-1")
 	if err != nil {
