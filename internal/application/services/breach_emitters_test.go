@@ -1,48 +1,19 @@
-// Package services — emitter tests (PR3-T3 RED phase). They prove the auth and
-// lot services emit breach events (login/refresh/lot.create) and that a replay
-// emits the critical event with the request id. The constructors/signatures
-// they use do not exist yet — that is the RED.
+// Package services — emitter tests (PR2-T1 RED phase). They prove the auth and
+// lot services emit breach signals through the sink: login/refresh/lot.create
+// info events and the critical replay event carrying the request id. The
+// constructors/signatures they use do not exist yet — that is the RED.
 package services
 
 import (
 	"context"
 	"errors"
-	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/ezequielranieri/agro-iam/internal/application/ports"
 	"github.com/ezequielranieri/agro-iam/internal/domain"
+	"github.com/ezequielranieri/agro-iam/internal/requestid"
 )
-
-// fakeAuditService records every Record call so tests can assert emission.
-type fakeAuditService struct {
-	records []auditCall
-}
-
-type auditCall struct {
-	tenantID, actorID, action, severity string
-}
-
-func (f *fakeAuditService) Record(ctx context.Context, tenantID, actorUserID, action, entityType, entityID string,
-	payload []byte, severity string) error {
-	f.records = append(f.records, auditCall{tenantID: tenantID, actorID: actorUserID, action: action, severity: severity})
-	return nil
-}
-
-func (f *fakeAuditService) VerifyChain(ctx context.Context, tenantID string) (int64, error) {
-	return 0, nil
-}
-
-// bufLogger captures slog output so tests can assert critical events carry the
-// request id.
-func bufLogger(t *testing.T) (*slog.Logger, *strings.Builder) {
-	t.Helper()
-	var buf strings.Builder
-	log := slog.New(slog.NewTextHandler(&buf, nil))
-	return log, &buf
-}
 
 // fakeUserRepo implements ports.UserRepository.
 type fakeUserRepo struct {
@@ -114,32 +85,36 @@ func (f *fakeRefreshRepo) FindByHash(ctx context.Context, hash string) (*ports.R
 func (f *fakeRefreshRepo) Revoke(ctx context.Context, id, replacedBy string) error { return nil }
 func (f *fakeRefreshRepo) RevokeFamily(ctx context.Context, familyID string) error { return nil }
 
-// TestEmitterLoginEmitsAuthLogin proves a successful login emits
-// auth.login info through the audit service.
+// TestEmitterLoginEmitsAuthLogin proves a successful login emits a
+// login_success/auth.login info signal with the tenant and actor through the
+// sink.
 func TestEmitterLoginEmitsAuthLogin(t *testing.T) {
 	users := &fakeUserRepo{user: &domain.User{ID: "user-1", TenantID: "tenant-1", IsActive: true, PasswordHash: "hash"}}
 	tokens := &fakeTokenManager{}
 	refresh := &fakeRefreshRepo{}
 	hasher := &fakeHasher{ok: true}
 
-	audit := &fakeAuditService{}
-	svc := NewAuthService(users, &fakeTenantRepo{}, tokens, hasher, refresh, audit, discardLogger(), time.Hour, time.Hour)
+	sink := &recordingSink{}
+	svc := NewAuthService(users, &fakeTenantRepo{}, tokens, hasher, refresh, sink, time.Hour, time.Hour)
 
 	_, err := svc.Login(context.Background(), "tenant-1", "a@b.test", "pass")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	if len(audit.records) != 1 {
-		t.Fatalf("audit records = %d, want 1 (auth.login)", len(audit.records))
+	if len(sink.events) != 1 {
+		t.Fatalf("emitted signals = %d, want 1 (auth.login)", len(sink.events))
 	}
-	rec := audit.records[0]
-	if rec.action != "auth.login" || rec.severity != domain.SeverityInfo {
-		t.Fatalf("record = %+v, want auth.login/info", rec)
+	ev := sink.events[0]
+	if ev.Signal != string(SignalLoginSuccess) || ev.Action != "auth.login" || ev.Severity != domain.SeverityInfo {
+		t.Fatalf("event = %+v, want login_success/auth.login/info", ev)
+	}
+	if ev.TenantID != "tenant-1" || ev.ActorID != "user-1" {
+		t.Fatalf("event identity = %+v, want tenant-1/user-1", ev)
 	}
 }
 
-// TestEmitterRefreshEmitsAuthRefresh proves a successful refresh emits
-// auth.refresh info.
+// TestEmitterRefreshEmitsAuthRefresh proves a successful refresh emits a
+// refresh_success/auth.refresh info signal.
 func TestEmitterRefreshEmitsAuthRefresh(t *testing.T) {
 	tokens := &fakeTokenManager{}
 	refresh := &fakeRefreshRepo{record: &ports.RefreshTokenRecord{
@@ -152,25 +127,25 @@ func TestEmitterRefreshEmitsAuthRefresh(t *testing.T) {
 	}}
 	hasher := &fakeHasher{}
 
-	audit := &fakeAuditService{}
-	svc := NewAuthService(&fakeUserRepo{}, &fakeTenantRepo{}, tokens, hasher, refresh, audit, discardLogger(), time.Hour, time.Hour)
+	sink := &recordingSink{}
+	svc := NewAuthService(&fakeUserRepo{}, &fakeTenantRepo{}, tokens, hasher, refresh, sink, time.Hour, time.Hour)
 
 	_, err := svc.Refresh(context.Background(), "plain-token")
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
-	if len(audit.records) != 1 {
-		t.Fatalf("audit records = %d, want 1 (auth.refresh)", len(audit.records))
+	if len(sink.events) != 1 {
+		t.Fatalf("emitted signals = %d, want 1 (auth.refresh)", len(sink.events))
 	}
-	rec := audit.records[0]
-	if rec.action != "auth.refresh" || rec.severity != domain.SeverityInfo {
-		t.Fatalf("record = %+v, want auth.refresh/info", rec)
+	ev := sink.events[0]
+	if ev.Signal != string(SignalRefreshSuccess) || ev.Action != "auth.refresh" || ev.Severity != domain.SeverityInfo {
+		t.Fatalf("event = %+v, want refresh_success/auth.refresh/info", ev)
 	}
 }
 
 // TestEmitterReplayEmitsCriticalWithRequestID proves a replay (revoked with a
-// replacement) emits auth.refresh.replay critical — and the slog line carries
-// the request id.
+// replacement) emits a refresh_replay/auth.refresh.replay critical signal and
+// the sink event carries the request id from the context.
 func TestEmitterReplayEmitsCriticalWithRequestID(t *testing.T) {
 	tokens := &fakeTokenManager{}
 	replacedAt := time.Now().Add(-time.Minute).Unix()
@@ -186,37 +161,33 @@ func TestEmitterReplayEmitsCriticalWithRequestID(t *testing.T) {
 	}}
 	hasher := &fakeHasher{}
 
-	audit := &fakeAuditService{}
-	log, buf := bufLogger(t)
-	svc := NewAuthService(&fakeUserRepo{}, &fakeTenantRepo{}, tokens, hasher, refresh, audit, log, time.Hour, time.Hour)
+	sink := &recordingSink{}
+	svc := NewAuthService(&fakeUserRepo{}, &fakeTenantRepo{}, tokens, hasher, refresh, sink, time.Hour, time.Hour)
 
-	_, err := svc.Refresh(context.Background(), "plain-token")
+	ctx := requestid.WithRequestID(context.Background(), "req-42")
+	_, err := svc.Refresh(ctx, "plain-token")
 	if !errors.Is(err, domain.ErrUnauthorized) {
 		t.Fatalf("Refresh error = %v, want ErrUnauthorized", err)
 	}
 
-	// Audit row: critical replay event for the tenant.
-	if len(audit.records) != 1 {
-		t.Fatalf("audit records = %d, want 1 (replay critical)", len(audit.records))
+	if len(sink.events) != 1 {
+		t.Fatalf("emitted signals = %d, want 1 (replay critical)", len(sink.events))
 	}
-	rec := audit.records[0]
-	if rec.action != "auth.refresh.replay" || rec.severity != domain.SeverityCritical {
-		t.Fatalf("record = %+v, want auth.refresh.replay/critical", rec)
+	ev := sink.events[0]
+	if ev.Signal != string(SignalRefreshReplay) || ev.Action != "auth.refresh.replay" || ev.Severity != domain.SeverityCritical {
+		t.Fatalf("event = %+v, want refresh_replay/auth.refresh.replay/critical", ev)
 	}
-
-	// Log line must carry a request id.
-	logOut := buf.String()
-	if !strings.Contains(logOut, "request_id") {
-		t.Fatalf("log output missing request_id:\n%s", logOut)
+	if ev.RequestID != "req-42" {
+		t.Fatalf("event request_id = %q, want req-42 (correlated from context)", ev.RequestID)
 	}
 }
 
-// TestEmitterLotCreateEmitsLotCreate proves lot creation emits lot.create info
-// with the actor user id.
+// TestEmitterLotCreateEmitsLotCreate proves lot creation emits a lot.create
+// info signal with the actor user id and an empty Signal (R6: no new signal).
 func TestEmitterLotCreateEmitsLotCreate(t *testing.T) {
 	repo := &fakeLotRepo{}
-	audit := &fakeAuditService{}
-	svc := NewLotService(repo, audit, discardLogger())
+	sink := &recordingSink{}
+	svc := NewLotService(repo, sink)
 
 	lot, err := svc.Create(context.Background(), "tenant-1", "actor-user-1", "Campo Norte", 12.5, "soy")
 	if err != nil {
@@ -226,14 +197,14 @@ func TestEmitterLotCreateEmitsLotCreate(t *testing.T) {
 		t.Fatal("lot must not be nil")
 	}
 
-	if len(audit.records) != 1 {
-		t.Fatalf("audit records = %d, want 1 (lot.create)", len(audit.records))
+	if len(sink.events) != 1 {
+		t.Fatalf("emitted signals = %d, want 1 (lot.create)", len(sink.events))
 	}
-	rec := audit.records[0]
-	if rec.action != "lot.create" || rec.severity != domain.SeverityInfo {
-		t.Fatalf("record = %+v, want lot.create/info", rec)
+	ev := sink.events[0]
+	if ev.Signal != "" || ev.Action != "lot.create" || ev.Severity != domain.SeverityInfo {
+		t.Fatalf("event = %+v, want Signal=\"\" lot.create/info", ev)
 	}
-	if rec.actorID != "actor-user-1" {
-		t.Fatalf("actorID = %q, want actor-user-1 (Create must receive the actor)", rec.actorID)
+	if ev.ActorID != "actor-user-1" {
+		t.Fatalf("actorID = %q, want actor-user-1 (Create must receive the actor)", ev.ActorID)
 	}
 }
