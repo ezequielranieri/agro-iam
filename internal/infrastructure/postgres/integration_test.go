@@ -581,3 +581,120 @@ func TestCrossTenantInsertBlocked(t *testing.T) {
 		t.Fatalf("rejected INSERT left %d rows behind", count)
 	}
 }
+// TestCampaignRepoUpdateDelete proves the CRUD half of the R1 rewrite: Update
+// is a full-row replace inside WithTenant, and a missing row — whether
+// nonexistent or owned by another tenant (hidden by RLS) — surfaces as
+// domain.ErrNotFound via RowsAffected()==0, mirroring UserRepo.Update.
+func TestCampaignRepoUpdateDelete(t *testing.T) {
+	ctx := setupIntegrationTest(t)
+	tenantRepo := NewTenantRepo(testPool)
+	campaignRepo := NewCampaignRepo(testPool)
+
+	tenantA := createTestTenant(ctx, t, tenantRepo, "Coop A")
+	tenantB := createTestTenant(ctx, t, tenantRepo, "Coop B")
+	campaign := createTestCampaign(ctx, t, campaignRepo, tenantA.ID, "Campaña Original")
+	campaignB := createTestCampaign(ctx, t, campaignRepo, tenantB.ID, "De B")
+
+	// Update persists the new values (full-row replace).
+	campaign.Name = "Campaña Actualizada"
+	campaign.Season = "2027"
+	if err := campaignRepo.Update(ctx, campaign); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	found, err := campaignRepo.FindByID(ctx, tenantA.ID, campaign.ID)
+	if err != nil {
+		t.Fatalf("FindByID after Update: %v", err)
+	}
+	if found.Name != "Campaña Actualizada" || found.Season != "2027" {
+		t.Fatalf("after Update = %+v, want updated name/season", found)
+	}
+
+	// Update on a nonexistent id is ErrNotFound.
+	missing := &domain.Campaign{ID: newUUID(t), TenantID: tenantA.ID, Name: "Ghost"}
+	if err := campaignRepo.Update(ctx, missing); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("Update(missing) err = %v, want domain.ErrNotFound", err)
+	}
+
+	// Cross-tenant Update claims B's id under A's context: RLS hides the row, so
+	// the UPDATE affects zero rows and surfaces as ErrNotFound without touching B.
+	if err := campaignRepo.Update(ctx, &domain.Campaign{ID: campaignB.ID, TenantID: tenantA.ID, Name: "sneaky"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("cross-tenant Update err = %v, want domain.ErrNotFound", err)
+	}
+	if _, err := campaignRepo.FindByID(ctx, tenantB.ID, campaignB.ID); err != nil {
+		t.Fatalf("B's campaign damaged by cross-tenant Update: %v", err)
+	}
+
+	// Delete removes the row; the row is gone, a second Delete and a
+	// cross-tenant Delete are ErrNotFound.
+	if err := campaignRepo.Delete(ctx, tenantA.ID, campaign.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := campaignRepo.FindByID(ctx, tenantA.ID, campaign.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("FindByID after Delete err = %v, want domain.ErrNotFound", err)
+	}
+	if err := campaignRepo.Delete(ctx, tenantA.ID, campaign.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("Delete(missing) err = %v, want domain.ErrNotFound", err)
+	}
+	if err := campaignRepo.Delete(ctx, tenantB.ID, campaign.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("cross-tenant Delete err = %v, want domain.ErrNotFound", err)
+	}
+}
+
+// TestApplicationRepoUpdateDelete is the R5 mirror of
+// TestCampaignRepoUpdateDelete: full-row Update, Delete, and RowsAffected()==0
+// mapping to domain.ErrNotFound for missing and cross-tenant rows.
+func TestApplicationRepoUpdateDelete(t *testing.T) {
+	ctx := setupIntegrationTest(t)
+	tenantRepo := NewTenantRepo(testPool)
+	applicationRepo := NewApplicationRepo(testPool)
+
+	tenantA := createTestTenant(ctx, t, tenantRepo, "Coop A")
+	tenantB := createTestTenant(ctx, t, tenantRepo, "Coop B")
+	app := createTestApplication(ctx, t, applicationRepo, tenantA.ID, "Original")
+	appB := createTestApplication(ctx, t, applicationRepo, tenantB.ID, "De B")
+
+	// Update persists the new values (full-row replace).
+	app.ProductName = "Actualizado"
+	app.Dose = "5 l/ha"
+	if err := applicationRepo.Update(ctx, app); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	found, err := applicationRepo.FindByID(ctx, tenantA.ID, app.ID)
+	if err != nil {
+		t.Fatalf("FindByID after Update: %v", err)
+	}
+	if found.ProductName != "Actualizado" || found.Dose != "5 l/ha" {
+		t.Fatalf("after Update = %+v, want updated product/dose", found)
+	}
+
+	// Update on a nonexistent id is ErrNotFound. Update is a full-row replace,
+	// so the attempted replacement still carries valid values — only the id is
+	// unknown to the tenant.
+	missing := &domain.Application{ID: newUUID(t), TenantID: tenantA.ID, LotID: newUUID(t), CampaignID: newUUID(t), ProductName: "Ghost"}
+	if err := applicationRepo.Update(ctx, missing); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("Update(missing) err = %v, want domain.ErrNotFound", err)
+	}
+
+	// Cross-tenant Update surfaces as ErrNotFound without touching B's row.
+	if err := applicationRepo.Update(ctx, &domain.Application{ID: appB.ID, TenantID: tenantA.ID, LotID: newUUID(t), CampaignID: newUUID(t), ProductName: "sneaky"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("cross-tenant Update err = %v, want domain.ErrNotFound", err)
+	}
+	if _, err := applicationRepo.FindByID(ctx, tenantB.ID, appB.ID); err != nil {
+		t.Fatalf("B's application damaged by cross-tenant Update: %v", err)
+	}
+
+	// Delete removes the row; the row is gone, a second Delete and a
+	// cross-tenant Delete are ErrNotFound.
+	if err := applicationRepo.Delete(ctx, tenantA.ID, app.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := applicationRepo.FindByID(ctx, tenantA.ID, app.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("FindByID after Delete err = %v, want domain.ErrNotFound", err)
+	}
+	if err := applicationRepo.Delete(ctx, tenantA.ID, app.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("Delete(missing) err = %v, want domain.ErrNotFound", err)
+	}
+	if err := applicationRepo.Delete(ctx, tenantB.ID, app.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("cross-tenant Delete err = %v, want domain.ErrNotFound", err)
+	}
+}
