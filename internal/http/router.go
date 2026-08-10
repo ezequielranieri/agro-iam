@@ -22,6 +22,7 @@ type Server struct {
 	lots         ports.LotService
 	campaigns    ports.CampaignService
 	applications ports.ApplicationService
+	users        ports.UserService
 	rateLimiter  *redis.RateLimiter
 	signals      ports.BreachSignalSink
 	log          *slog.Logger
@@ -30,8 +31,8 @@ type Server struct {
 // NewServer builds the server with its dependencies.
 // rateLimiter may be nil (rate limiting disabled); signals may be nil (breach
 // emission is a no-op).
-func NewServer(auth ports.AuthService, tokens ports.TokenManager, lots ports.LotService, campaigns ports.CampaignService, applications ports.ApplicationService, rateLimiter *redis.RateLimiter, signals ports.BreachSignalSink, log *slog.Logger) *Server {
-	return &Server{auth: auth, tokens: tokens, lots: lots, campaigns: campaigns, applications: applications, rateLimiter: rateLimiter, signals: signals, log: log}
+func NewServer(auth ports.AuthService, tokens ports.TokenManager, lots ports.LotService, campaigns ports.CampaignService, applications ports.ApplicationService, users ports.UserService, rateLimiter *redis.RateLimiter, signals ports.BreachSignalSink, log *slog.Logger) *Server {
+	return &Server{auth: auth, tokens: tokens, lots: lots, campaigns: campaigns, applications: applications, users: users, rateLimiter: rateLimiter, signals: signals, log: log}
 }
 
 // Routes assembles the stdlib ServeMux. Path parameters use the Go 1.22
@@ -93,6 +94,17 @@ func (s *Server) Routes() http.Handler {
 		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.Update))))
 	mux.Handle("DELETE /api/v1/applications/{id}",
 		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.Delete))))
+
+	usersHandler := handlers.NewUsersHandler(s.users, s.log)
+
+	// Provisioning routes: guarded by RequireAuth here — the admin-only guard
+	// (R12) lands with RequireRole in PR D2.
+	mux.Handle("POST /api/v1/users",
+		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(usersHandler.Create))))
+	mux.Handle("GET /api/v1/users",
+		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(usersHandler.List))))
+	mux.Handle("PATCH /api/v1/users/{id}",
+		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(usersHandler.Update))))
 
 	return s.chain(mux)
 }

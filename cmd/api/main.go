@@ -97,6 +97,7 @@ func run(log *slog.Logger) error {
 	lotRepo := postgres.NewLotRepo(pool)
 	campaignRepo := postgres.NewCampaignRepo(pool)
 	applicationRepo := postgres.NewApplicationRepo(pool)
+	userRoleRepo := postgres.NewUserRoleRepo(pool)
 
 	// Audit: tamper-evident chained trail (slice 3). The repo runs every write
 	// inside WithTenant; the service is fail-open by contract.
@@ -118,11 +119,16 @@ func run(log *slog.Logger) error {
 	campaignService := services.NewCampaignService(campaignRepo, signals)
 	applicationService := services.NewApplicationService(applicationRepo, signals)
 
+	// Provisioning: the Argon2id hasher is shared with the auth service so
+	// hashes created here verify there and vice versa (one hashing policy).
+	hasher := auth.NewPasswordHasher()
+	userService := services.NewUserService(userRepo, userRoleRepo, hasher, signals)
+
 	authService := services.NewAuthService(
 		userRepo,
 		tenantRepo,
 		tokenManager,
-		auth.NewPasswordHasher(),
+		hasher,
 		refreshStore,
 		signals,
 		accessTokenTTL,
@@ -131,7 +137,7 @@ func run(log *slog.Logger) error {
 
 	srv := &http.Server{
 		Addr:         cfg.httpAddr,
-		Handler:      apphttp.NewServer(authService, tokenManager, lotService, campaignService, applicationService, rateLimiter, signals, log).Routes(),
+		Handler:      apphttp.NewServer(authService, tokenManager, lotService, campaignService, applicationService, userService, rateLimiter, signals, log).Routes(),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 15 * time.Second,
 	}
