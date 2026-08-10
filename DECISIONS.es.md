@@ -519,6 +519,106 @@ implementar.
 
 ---
 
+### 2.16 Applications FK gap accepted as-is (no migration) — Status: Accepted
+
+**Rule**
+- The `app.applications` FK gap — rows may reference a non-existent `lot_id` or
+  `campaign_id` — MUST be accepted as-is in this slice: no migration, no new
+  constraints (R7).
+- Mitigations MUST stay in place: RLS read isolation (a cross-tenant reference
+  is invisible) and `gen_random_uuid()` for row identifiers.
+- The composite-FK follow-up — linking `(lot_id, tenant_id)` and
+  `(campaign_id, tenant_id)` to the parents' composite PK `(id, tenant_id)` —
+  MUST be flagged as future work, not silently forgotten.
+
+**Alternatives rejected**
+- *Composite-FK migration now*: forces a `app.users` primary-key change (users
+  are keyed by single-column `id`), schema churn that is out of scope for this
+  slice.
+
+**Cost accepted**
+- Orphan references are possible until the follow-up lands; application code
+  must tolerate them and rely on RLS to hide cross-tenant rows.
+
+---
+
+### 2.17 RBAC model: single most-privileged role claim at issue time — Status: Accepted
+
+**Rule**
+- Access tokens MUST carry ONE `role` claim, resolved at token-issue time
+  (Login AND Refresh) from the user's `app.user_roles` memberships (D3/R13).
+- The claim MUST be the single most-privileged code the user holds, by the
+  fixed precedence `admin > agronomist > producer > auditor > hauler`.
+- A user with no memberships MUST get an empty role claim — roleless tokens are
+  legal — but a role-resolution ERROR MUST fail token issuance (fail-closed)
+  rather than silently issue a roleless token.
+- Role resolution MUST NOT happen per request: it is embedded once per token at
+  issue time and enforced by the HTTP middleware.
+
+**Alternatives rejected**
+- *Per-request role lookup*: violates the stateless-token constitution (2.6)
+  and adds a database hit to every request.
+- *Roles-array claim*: breaks the existing single-string `role` claim shape.
+
+**Cost accepted**
+- A role change only takes effect on the next login/refresh; an already-issued
+  token keeps its claim until expiry (see 2.19).
+
+---
+
+### 2.18 RequireRole route matrix — Status: Accepted
+
+**Rule**
+- Write routes MUST be guarded with `RequireRole`, composed as
+  `requireAuth(requireRole(...)(rateLimit(...)(handler)))` per this matrix
+  (D6/D7):
+  - campaign writes (POST/PATCH/DELETE `/api/v1/campaigns...`) — `admin`,
+    `agronomist`;
+  - application writes (POST/PATCH/DELETE `/api/v1/applications...`) — `admin`,
+    `agronomist`, `producer`;
+  - provisioning (POST/GET/PATCH `/api/v1/users...`) — `admin` only.
+- Reads (GET/List) on campaigns and applications MUST accept any authenticated
+  user.
+- `RequireRole` MUST read `claims.RoleFrom` and collapse an empty or not-allowed
+  role to a uniform `403 {"error":"forbidden"}` via `writeError`.
+- Auth endpoints and lot routes MUST stay unchanged in this slice.
+
+**Alternatives rejected**
+- *Handler-level role checks*: the project convention is middleware
+  (RequireAuth, rateLimit); scattered checks are harder to audit and easier to
+  skip.
+- *Gating lots by role*: out of scope for this slice; lot write routes stay
+  role-ungated.
+
+**Cost accepted**
+- The matrix lives in code, not configuration — changing a route's roles means
+  editing `router.go`.
+
+---
+
+### 2.19 Role-change lag bounded by the access-token TTL — Status: Accepted
+
+**Rule**
+- A role change (grant or revoke) MUST take effect for an already-issued token
+  only when it is re-issued, at the latest after the 15-minute access-token TTL
+  (R16).
+- The Refresh path MUST re-resolve the role BEFORE rotating — before the
+  revoke/store side effects — so a failed resolution never burns a rotation.
+- Login MUST re-resolve the role on every new session.
+
+**Alternatives rejected**
+- *Immediate per-request enforcement of role changes*: requires server-side
+  token state or per-request lookups, both rejected (see 2.6, 2.17).
+- *Ignoring role changes until re-login*: would let a demoted user keep write
+  access for up to the refresh-token TTL (30 days); re-resolving on Refresh
+  bounds the lag to the access-token TTL.
+
+**Cost accepted**
+- A revoked role can still act until the current access token expires (≤15
+  minutes) — the accepted, documented exposure.
+
+---
+
 ## 3. Convenciones de código
 
 - **El dominio es puro**: `internal/domain` no importa nada más que la biblioteca
