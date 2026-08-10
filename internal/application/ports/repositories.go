@@ -38,17 +38,34 @@ type LotRepository interface {
 }
 
 // CampaignRepository persists campaigns, always scoped to the tenant session.
+// Implementations run every query inside WithTenant: RLS is the enforcement
+// point, so the SQL carries no explicit tenant_id filter (user_repo pattern).
 type CampaignRepository interface {
 	FindByID(ctx context.Context, tenantID, id string) (*domain.Campaign, error)
 	List(ctx context.Context, tenantID string) ([]*domain.Campaign, error)
 	Create(ctx context.Context, campaign *domain.Campaign) error
+	// Update persists changes to an existing campaign (full-row replace, no
+	// partial PATCH semantics); returns domain.ErrNotFound when the row is
+	// missing or belongs to another tenant.
+	Update(ctx context.Context, campaign *domain.Campaign) error
+	// Delete removes the campaign; returns domain.ErrNotFound when the row is
+	// missing or belongs to another tenant.
+	Delete(ctx context.Context, tenantID, id string) error
 }
 
-// ApplicationRepository persists input applications.
+// ApplicationRepository persists input applications, always scoped to the
+// tenant session. Like CampaignRepository, every query runs inside WithTenant.
 type ApplicationRepository interface {
 	FindByID(ctx context.Context, tenantID, id string) (*domain.Application, error)
 	List(ctx context.Context, tenantID string) ([]*domain.Application, error)
 	Create(ctx context.Context, app *domain.Application) error
+	// Update persists changes to an existing application (full-row replace);
+	// returns domain.ErrNotFound when the row is missing or belongs to another
+	// tenant.
+	Update(ctx context.Context, app *domain.Application) error
+	// Delete removes the application; returns domain.ErrNotFound when the row
+	// is missing or belongs to another tenant.
+	Delete(ctx context.Context, tenantID, id string) error
 }
 
 // AuditRepository appends audit entries. There is intentionally no update or
