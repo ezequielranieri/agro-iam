@@ -122,6 +122,41 @@ type CampaignService interface {
 	Delete(ctx context.Context, tenantID, actorUserID, id string) error
 }
 
+// ApplicationInput is the tenant-independent payload of an application write.
+// AppliedAt is required at the domain level (schema NOT NULL, DEFAULT now());
+// a zero AppliedAt is defaulted by the service clock. OperatorID is nullable:
+// the empty string maps to NULL in the repository (nullableUUID precedent).
+type ApplicationInput struct {
+	LotID       string
+	CampaignID  string
+	ProductName string
+	Dose        string
+	AppliedAt   time.Time
+	OperatorID  string
+	Notes       string
+}
+
+// ApplicationService is the use-case boundary for application management.
+// Every operation is scoped to a tenant, which the HTTP layer takes from the
+// authenticated claims. Create/Update/Delete emit audit events (fail-open)
+// with the authenticated actor user id.
+type ApplicationService interface {
+	// List returns every application owned by the tenant.
+	List(ctx context.Context, tenantID string) ([]*domain.Application, error)
+	// GetByID returns one application or domain.ErrNotFound.
+	GetByID(ctx context.Context, tenantID, id string) (*domain.Application, error)
+	// Create validates and persists a new application owned by the tenant.
+	// actorUserID is recorded as the audit actor.
+	Create(ctx context.Context, tenantID, actorUserID string, in ApplicationInput) (*domain.Application, error)
+	// Update replaces the mutable fields of an existing application (full-row
+	// replace, no partial PATCH semantics); returns domain.ErrNotFound when
+	// the row is missing or belongs to another tenant.
+	Update(ctx context.Context, tenantID, actorUserID, id string, in ApplicationInput) (*domain.Application, error)
+	// Delete removes the application; returns domain.ErrNotFound when the row
+	// is missing or belongs to another tenant.
+	Delete(ctx context.Context, tenantID, actorUserID, id string) error
+}
+
 // AuditService is the use-case boundary for the tamper-evident audit trail.
 // Emitters (services and handlers) call Record after security-relevant events;
 // failures are WARN-logged and never fail the caller (fail-open).
