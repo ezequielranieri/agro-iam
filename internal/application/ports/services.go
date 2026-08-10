@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"time"
 
 	"github.com/ezequielranieri/agro-iam/internal/domain"
 )
@@ -88,6 +89,37 @@ type LotService interface {
 	// is the authenticated user performing the action (from the JWT claims),
 	// recorded as the audit actor.
 	Create(ctx context.Context, tenantID, actorUserID, name string, areaHA float64, crop string) (*domain.Lot, error)
+}
+
+// CampaignInput is the tenant-independent payload of a campaign write. The
+// date fields are optional pointers (RefreshTokenRecord precedent): a nil date
+// simply is not set, which is distinct from a zero time.
+type CampaignInput struct {
+	Name      string
+	Season    string
+	StartedAt *time.Time
+	EndedAt   *time.Time
+}
+
+// CampaignService is the use-case boundary for campaign management. Every
+// operation is scoped to a tenant, which the HTTP layer takes from the
+// authenticated claims. Create/Update/Delete emit audit events (fail-open)
+// with the authenticated actor user id.
+type CampaignService interface {
+	// List returns every campaign owned by the tenant.
+	List(ctx context.Context, tenantID string) ([]*domain.Campaign, error)
+	// GetByID returns one campaign or domain.ErrNotFound.
+	GetByID(ctx context.Context, tenantID, id string) (*domain.Campaign, error)
+	// Create validates and persists a new campaign owned by the tenant.
+	// actorUserID is recorded as the audit actor.
+	Create(ctx context.Context, tenantID, actorUserID string, in CampaignInput) (*domain.Campaign, error)
+	// Update replaces the mutable fields of an existing campaign (full-row
+	// replace, no partial PATCH semantics); returns domain.ErrNotFound when
+	// the row is missing or belongs to another tenant.
+	Update(ctx context.Context, tenantID, actorUserID, id string, in CampaignInput) (*domain.Campaign, error)
+	// Delete removes the campaign; returns domain.ErrNotFound when the row is
+	// missing or belongs to another tenant.
+	Delete(ctx context.Context, tenantID, actorUserID, id string) error
 }
 
 // AuditService is the use-case boundary for the tamper-evident audit trail.
