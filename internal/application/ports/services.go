@@ -157,6 +157,41 @@ type ApplicationService interface {
 	Delete(ctx context.Context, tenantID, actorUserID, id string) error
 }
 
+// UserInput is the tenant-independent payload of a user provisioning create
+// (R9). Password is the plaintext to hash with Argon2id; it never reaches the
+// repository or any response.
+type UserInput struct {
+	Email    string
+	Password string
+	FullName string
+	Role     string
+}
+
+// UpdateUserInput is the payload of a user update: a full-row replace of the
+// mutable fields (no partial PATCH semantics — the design decision resolved in
+// the slice 4 tasks).
+type UpdateUserInput struct {
+	FullName string
+	IsActive bool
+}
+
+// UserService is the use-case boundary for user provisioning. Every operation
+// is scoped to a tenant, which the HTTP layer takes from the authenticated
+// claims. Responses never carry password material (R9).
+type UserService interface {
+	// CreateUser validates the role code, hashes the password (Argon2id PHC),
+	// persists the user and assigns the initial role. actorUserID is recorded
+	// as the audit actor. Returns domain.ErrConflict when the email already
+	// exists — in the same tenant or any other (global unique index, R11).
+	CreateUser(ctx context.Context, tenantID, actorUserID string, in UserInput) (*domain.User, error)
+	// ListUsers returns every user of the tenant.
+	ListUsers(ctx context.Context, tenantID string) ([]*domain.User, error)
+	// UpdateUser replaces the mutable fields of an existing user (full_name,
+	// is_active toggle); returns domain.ErrNotFound when the row is missing or
+	// belongs to another tenant.
+	UpdateUser(ctx context.Context, tenantID, actorUserID, id string, in UpdateUserInput) (*domain.User, error)
+}
+
 // AuditService is the use-case boundary for the tamper-evident audit trail.
 // Emitters (services and handlers) call Record after security-relevant events;
 // failures are WARN-logged and never fail the caller (fail-open).

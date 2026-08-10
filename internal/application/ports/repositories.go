@@ -18,6 +18,8 @@ type UserRepository interface {
 	FindByEmail(ctx context.Context, tenantID, email string) (*domain.User, error)
 	// FindByID returns a user or domain.ErrNotFound.
 	FindByID(ctx context.Context, tenantID, id string) (*domain.User, error)
+	// List returns every user of the tenant, ordered by created_at (R9).
+	List(ctx context.Context, tenantID string) ([]*domain.User, error)
 	// Create inserts a new user; returns domain.ErrConflict on duplicate email.
 	Create(ctx context.Context, user *domain.User) error
 	// Update persists changes to an existing user.
