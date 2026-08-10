@@ -126,7 +126,7 @@ func TestEmitterLoginEmitsAuthLogin(t *testing.T) {
 	hasher := &fakeHasher{ok: true}
 
 	sink := &recordingSink{}
-	svc := NewAuthService(users, &fakeTenantRepo{}, tokens, hasher, refresh, sink, time.Hour, time.Hour)
+	svc := NewAuthService(users, &fakeTenantRepo{}, tokens, hasher, &fakeUserRoleRepo{}, refresh, sink, time.Hour, time.Hour)
 
 	_, err := svc.Login(context.Background(), "tenant-1", "a@b.test", "pass")
 	if err != nil {
@@ -159,7 +159,7 @@ func TestEmitterRefreshEmitsAuthRefresh(t *testing.T) {
 	hasher := &fakeHasher{}
 
 	sink := &recordingSink{}
-	svc := NewAuthService(&fakeUserRepo{}, &fakeTenantRepo{}, tokens, hasher, refresh, sink, time.Hour, time.Hour)
+	svc := NewAuthService(&fakeUserRepo{}, &fakeTenantRepo{}, tokens, hasher, &fakeUserRoleRepo{}, refresh, sink, time.Hour, time.Hour)
 
 	_, err := svc.Refresh(context.Background(), "plain-token")
 	if err != nil {
@@ -193,7 +193,7 @@ func TestEmitterReplayEmitsCriticalWithRequestID(t *testing.T) {
 	hasher := &fakeHasher{}
 
 	sink := &recordingSink{}
-	svc := NewAuthService(&fakeUserRepo{}, &fakeTenantRepo{}, tokens, hasher, refresh, sink, time.Hour, time.Hour)
+	svc := NewAuthService(&fakeUserRepo{}, &fakeTenantRepo{}, tokens, hasher, &fakeUserRoleRepo{}, refresh, sink, time.Hour, time.Hour)
 
 	ctx := requestid.WithRequestID(context.Background(), "req-42")
 	_, err := svc.Refresh(ctx, "plain-token")

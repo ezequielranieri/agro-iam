@@ -129,6 +129,7 @@ func run(log *slog.Logger) error {
 		tenantRepo,
 		tokenManager,
 		hasher,
+		userRoleRepo,
 		refreshStore,
 		signals,
 		accessTokenTTL,
