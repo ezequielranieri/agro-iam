@@ -95,6 +95,7 @@ func run(log *slog.Logger) error {
 	tenantRepo := postgres.NewTenantRepo(pool)
 	refreshStore := auth.NewRefreshTokenStore(pool)
 	lotRepo := postgres.NewLotRepo(pool)
+	campaignRepo := postgres.NewCampaignRepo(pool)
 
 	// Audit: tamper-evident chained trail (slice 3). The repo runs every write
 	// inside WithTenant; the service is fail-open by contract.
@@ -113,6 +114,7 @@ func run(log *slog.Logger) error {
 	signals := services.NewFanOut(log, slogSink, auditSink)
 
 	lotService := services.NewLotService(lotRepo, signals)
+	campaignService := services.NewCampaignService(campaignRepo, signals)
 
 	authService := services.NewAuthService(
 		userRepo,
@@ -127,7 +129,7 @@ func run(log *slog.Logger) error {
 
 	srv := &http.Server{
 		Addr:         cfg.httpAddr,
-		Handler:      apphttp.NewServer(authService, tokenManager, lotService, rateLimiter, signals, log).Routes(),
+		Handler:      apphttp.NewServer(authService, tokenManager, lotService, campaignService, rateLimiter, signals, log).Routes(),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 15 * time.Second,
 	}
