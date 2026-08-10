@@ -26,11 +26,25 @@ const (
 	RoleHauler     = "hauler"
 )
 
-// UserRole links a user to a role within one tenant. Roles may carry
-// tenant-specific semantics (a user could be producer in tenant A and admin in
-// tenant B), hence the composite PK on (user_id, role_code, tenant_id in DB).
+// UserRole links a user to a role within one tenant. A user belongs to exactly
+// one tenant (users.tenant_id), so the composite PK on app.user_roles is
+// (user_id, role_code) — tenant_id is a plain column, NOT part of the PK. The
+// tenant_id column exists so RLS can scope every row; the PK uniqueness is the
+// one-role-per-user-per-tenant constraint.
 type UserRole struct {
 	UserID   string
 	RoleCode string
 	TenantID string
+}
+
+// IsValidRoleCode reports whether code is part of the fixed role vocabulary
+// (R10). Role codes are validated in the application layer BEFORE any write so
+// an unknown code never reaches SQL (the roles table is a global catalog and
+// there is no FK-style enforcement in the service path).
+func IsValidRoleCode(code string) bool {
+	switch code {
+	case RoleAdmin, RoleProducer, RoleAgronomist, RoleAuditor, RoleHauler:
+		return true
+	}
+	return false
 }
