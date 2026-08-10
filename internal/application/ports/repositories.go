@@ -68,6 +68,19 @@ type ApplicationRepository interface {
 	Delete(ctx context.Context, tenantID, id string) error
 }
 
+// UserRoleRepository persists role memberships (app.user_roles), always scoped
+// to the tenant session. Like every tenanted repository, implementations run
+// each query inside WithTenant: RLS is the enforcement point, so the SQL
+// carries no explicit tenant_id filter.
+type UserRoleRepository interface {
+	// Assign inserts a role membership; returns domain.ErrConflict when the
+	// (user_id, role_code) pair already exists (composite PK violation).
+	Assign(ctx context.Context, role *domain.UserRole) error
+	// ListByUser returns the role memberships the user holds in the tenant,
+	// ordered by role_code.
+	ListByUser(ctx context.Context, tenantID, userID string) ([]*domain.UserRole, error)
+}
+
 // AuditRepository appends audit entries. There is intentionally no update or
 // delete â€” the audit log is append-only.
 type AuditRepository interface {
