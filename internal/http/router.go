@@ -17,20 +17,21 @@ import (
 
 // Server bundles every dependency the HTTP layer needs.
 type Server struct {
-	auth        ports.AuthService
-	tokens      ports.TokenManager
-	lots        ports.LotService
-	campaigns   ports.CampaignService
-	rateLimiter *redis.RateLimiter
-	signals     ports.BreachSignalSink
-	log         *slog.Logger
+	auth         ports.AuthService
+	tokens       ports.TokenManager
+	lots         ports.LotService
+	campaigns    ports.CampaignService
+	applications ports.ApplicationService
+	rateLimiter  *redis.RateLimiter
+	signals      ports.BreachSignalSink
+	log          *slog.Logger
 }
 
 // NewServer builds the server with its dependencies.
 // rateLimiter may be nil (rate limiting disabled); signals may be nil (breach
 // emission is a no-op).
-func NewServer(auth ports.AuthService, tokens ports.TokenManager, lots ports.LotService, campaigns ports.CampaignService, rateLimiter *redis.RateLimiter, signals ports.BreachSignalSink, log *slog.Logger) *Server {
-	return &Server{auth: auth, tokens: tokens, lots: lots, campaigns: campaigns, rateLimiter: rateLimiter, signals: signals, log: log}
+func NewServer(auth ports.AuthService, tokens ports.TokenManager, lots ports.LotService, campaigns ports.CampaignService, applications ports.ApplicationService, rateLimiter *redis.RateLimiter, signals ports.BreachSignalSink, log *slog.Logger) *Server {
+	return &Server{auth: auth, tokens: tokens, lots: lots, campaigns: campaigns, applications: applications, rateLimiter: rateLimiter, signals: signals, log: log}
 }
 
 // Routes assembles the stdlib ServeMux. Path parameters use the Go 1.22
@@ -76,6 +77,22 @@ func (s *Server) Routes() http.Handler {
 		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(campaignsHandler.Update))))
 	mux.Handle("DELETE /api/v1/campaigns/{id}",
 		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(campaignsHandler.Delete))))
+
+	applicationsHandler := handlers.NewApplicationsHandler(s.applications, s.log)
+
+	// Application routes: reads for any authenticated user, writes also gated
+	// by RequireAuth here — the role guard (admin | agronomist | producer)
+	// lands with RequireRole in PR D2 (R8).
+	mux.Handle("GET /api/v1/applications",
+		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.List))))
+	mux.Handle("POST /api/v1/applications",
+		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.Create))))
+	mux.Handle("GET /api/v1/applications/{id}",
+		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.GetByID))))
+	mux.Handle("PATCH /api/v1/applications/{id}",
+		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.Update))))
+	mux.Handle("DELETE /api/v1/applications/{id}",
+		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.Delete))))
 
 	return s.chain(mux)
 }
