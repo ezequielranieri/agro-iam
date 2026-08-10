@@ -698,3 +698,42 @@ func TestApplicationRepoUpdateDelete(t *testing.T) {
 		t.Fatalf("cross-tenant Delete err = %v, want domain.ErrNotFound", err)
 	}
 }
+
+// TestApplicationOrphanFKGapAccepted pins the R7 known limitation: app.applications
+// carries NO foreign keys on lot_id and campaign_id, so an application whose
+// lot_id and campaign_id match no rows is still inserted. Isolation is provided
+// by RLS read isolation and unguessable uuids, not by referential integrity —
+// a composite-FK follow-up is documented in DECISIONS (both languages). Note
+// the gap is scoped to lot_id/campaign_id: operator_id DOES carry a real
+// single-column FK to users(id), so it is left NULL here.
+func TestApplicationOrphanFKGapAccepted(t *testing.T) {
+	ctx := setupIntegrationTest(t)
+	tenantRepo := NewTenantRepo(testPool)
+	applicationRepo := NewApplicationRepo(testPool)
+
+	tenantA := createTestTenant(ctx, t, tenantRepo, "Coop A")
+
+	// The lot_id and campaign_id are random uuids that exist nowhere. Under the
+	// accepted R7 gap the INSERT must succeed (no FK rejection).
+	orphan := &domain.Application{
+		ID:          newUUID(t),
+		TenantID:    tenantA.ID,
+		LotID:       newUUID(t),
+		CampaignID:  newUUID(t),
+		ProductName: "Orphan product",
+		Dose:        "2 l/ha",
+		AppliedAt:   time.Now().UTC().Truncate(time.Second),
+		Notes:       "R7 gap proof",
+	}
+	if err := applicationRepo.Create(ctx, orphan); err != nil {
+		t.Fatalf("create with orphan lot/campaign must succeed under R7 gap: %v", err)
+	}
+
+	found, err := applicationRepo.FindByID(ctx, tenantA.ID, orphan.ID)
+	if err != nil {
+		t.Fatalf("FindByID after orphan create: %v", err)
+	}
+	if found.ProductName != "Orphan product" || found.LotID != orphan.LotID || found.CampaignID != orphan.CampaignID {
+		t.Fatalf("orphan application = %+v, want stored refs intact", found)
+	}
+}
