@@ -96,3 +96,80 @@ func TestRequireAuthRejectsMissingOrInvalidCredentials(t *testing.T) {
 		})
 	}
 }
+
+// stubTracker records whether a handler ran, so a 403 test can prove the
+// handler was never reached.
+type stubTracker struct {
+	ran bool
+}
+
+func (s *stubTracker) handler(w http.ResponseWriter, r *http.Request) {
+	s.ran = true
+	w.WriteHeader(http.StatusOK)
+}
+
+// TestRequireRoleAllowsAllowedRole proves a token whose role claim is in the
+// allowed set passes through to the handler.
+func TestRequireRoleAllowsAllowedRole(t *testing.T) {
+	tm := newTestTokenManager(t)
+	token := issueAccessToken(t, tm, ports.TokenClaims{UserID: "user-1", TenantID: "tenant-1", Role: "agronomist"})
+
+	stub := &stubTracker{}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/campaigns", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	RequireAuth(tm)(RequireRole("admin", "agronomist")(http.HandlerFunc(stub.handler))).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (allowed role passes)", rec.Code)
+	}
+	if !stub.ran {
+		t.Fatal("allowed role must reach the handler")
+	}
+}
+
+// TestRequireRoleRejectsWrongRole proves a token holding a role outside the
+// allowed set collapses to the uniform 403 and the handler never runs (R14).
+func TestRequireRoleRejectsWrongRole(t *testing.T) {
+	tm := newTestTokenManager(t)
+	token := issueAccessToken(t, tm, ports.TokenClaims{UserID: "user-1", TenantID: "tenant-1", Role: "producer"})
+
+	stub := &stubTracker{}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/campaigns", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	RequireAuth(tm)(RequireRole("admin", "agronomist")(http.HandlerFunc(stub.handler))).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if got := rec.Body.String(); got != "{\"error\":\"forbidden\"}\n" {
+		t.Fatalf("body = %q, want forbidden JSON", got)
+	}
+	if stub.ran {
+		t.Fatal("forbidden role must never reach the handler")
+	}
+}
+
+// TestRequireRoleRejectsEmptyRole proves a roleless token cannot reach a
+// guarded route: the empty claim is not in the allowed set (R14).
+func TestRequireRoleRejectsEmptyRole(t *testing.T) {
+	tm := newTestTokenManager(t)
+	token := issueAccessToken(t, tm, ports.TokenClaims{UserID: "user-1", TenantID: "tenant-1", Role: ""})
+
+	stub := &stubTracker{}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/campaigns", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	RequireAuth(tm)(RequireRole("admin", "agronomist")(http.HandlerFunc(stub.handler))).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for a roleless token", rec.Code)
+	}
+	if stub.ran {
+		t.Fatal("roleless token must never reach the handler")
+	}
+}

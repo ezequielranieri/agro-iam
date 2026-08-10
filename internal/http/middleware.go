@@ -91,6 +91,28 @@ func RequireAuth(tokenManager ports.TokenManager) func(http.Handler) http.Handle
 	}
 }
 
+// RequireRole gates a handler behind the RBAC role claim (R14). allowed is the
+// set of role codes permitted to reach the next handler; a role that is empty
+// or not in the set collapses to a uniform 403 JSON body — the same writeError
+// convention as RequireAuth's 401 — so a roleless token can never reach a
+// guarded route. It MUST wrap a RequireAuth-guarded handler: it reads
+// claims.RoleFrom, which only the auth middleware injects.
+func RequireRole(allowed ...string) func(http.Handler) http.Handler {
+	permit := make(map[string]bool, len(allowed))
+	for _, role := range allowed {
+		permit[role] = true
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !permit[claims.RoleFrom(r.Context())] {
+				writeError(w, http.StatusForbidden, "forbidden")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // bearerToken extracts the token from an Authorization header, requiring the
 // exact `Bearer ` scheme. Anything else â€” empty header, wrong scheme, missing
 // token â€” is rejected outright; there is no fallback scheme.
