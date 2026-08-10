@@ -84,6 +84,33 @@ func (r *UserRepo) FindByID(ctx context.Context, tenantID, id string) (*domain.U
 	return u, nil
 }
 
+// List returns every user of the tenant inside the tenant context. RLS hides
+// other tenants' rows entirely, so no explicit tenant filter is needed.
+func (r *UserRepo) List(ctx context.Context, tenantID string) ([]*domain.User, error) {
+	var users []*domain.User
+	err := WithTenant(ctx, r.pool, tenantID, func(tx pgxTx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT `+userColumns+` FROM app.users ORDER BY created_at`)
+		if err != nil {
+			return fmt.Errorf("list users: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			u, err := scanUser(rows)
+			if err != nil {
+				return fmt.Errorf("scan user: %w", err)
+			}
+			users = append(users, u)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
 func (r *UserRepo) Create(ctx context.Context, user *domain.User) error {
 	// The RLS tenant context comes from user.TenantID: the INSERT can only
 	// succeed inside that tenant's policy (WITH CHECK).

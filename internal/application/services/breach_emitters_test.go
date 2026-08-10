@@ -15,10 +15,15 @@ import (
 	"github.com/ezequielranieri/agro-iam/internal/requestid"
 )
 
-// fakeUserRepo implements ports.UserRepository.
+// fakeUserRepo implements ports.UserRepository. The err field drives every
+// method so each error branch of the service is reachable; created/updated
+// record the writes the service performed.
 type fakeUserRepo struct {
-	user *domain.User
-	err  error
+	user    *domain.User
+	list    []*domain.User
+	err     error
+	created []*domain.User
+	updated []*domain.User
 }
 
 func (f *fakeUserRepo) FindByEmail(ctx context.Context, tenantID, email string) (*domain.User, error) {
@@ -32,11 +37,37 @@ func (f *fakeUserRepo) FindByEmail(ctx context.Context, tenantID, email string) 
 }
 
 func (f *fakeUserRepo) FindByID(ctx context.Context, tenantID, id string) (*domain.User, error) {
-	return nil, domain.ErrNotFound
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.user == nil {
+		return nil, domain.ErrNotFound
+	}
+	return f.user, nil
 }
 
-func (f *fakeUserRepo) Create(ctx context.Context, user *domain.User) error { return nil }
-func (f *fakeUserRepo) Update(ctx context.Context, user *domain.User) error { return nil }
+func (f *fakeUserRepo) List(ctx context.Context, tenantID string) ([]*domain.User, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.list, nil
+}
+
+func (f *fakeUserRepo) Create(ctx context.Context, user *domain.User) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.created = append(f.created, user)
+	return nil
+}
+
+func (f *fakeUserRepo) Update(ctx context.Context, user *domain.User) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.updated = append(f.updated, user)
+	return nil
+}
 
 // fakeTenantRepo implements ports.TenantRepository.
 type fakeTenantRepo struct{}
