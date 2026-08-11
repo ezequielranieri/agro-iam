@@ -13,8 +13,8 @@ JWT + rotación de familias de refresh tokens) en Go idiomático.
 
 > Slice 0 — esqueleto base: modelo de dominio, ports, repositorios, primitivas de
 > autenticación, esquema con RLS y la carcasa HTTP. Los flujos de extremo a extremo
-> (aprovisionamiento de usuarios, CRUD de lotes/campañas, endpoints de RBAC) llegan
-> en slices posteriores.
+> (aprovisionamiento de usuarios, CRUD de campañas/aplicaciones, aplicación de RBAC)
+> se construyen sobre esa base y se entregan hasta el slice 4.
 
 ## El problema
 
@@ -223,7 +223,7 @@ integración de RLS se ejecutan de verdad en CI — sin archivo `docker-compose`
 - [x] Slice 2 — pruebas de integración del aislamiento RLS contra PostgreSQL real (rol dedicado sin superusuario) + CI en GitHub Actions
 - [x] Slice 3 — emisión de eventos de auditoría con encadenamiento por hash, limitación de tasa respaldada por Redis, detección de brechas / alertas de compromiso de tokens
 - [x] M30 — port de salida de señales de brecha (`ports.BreachSignalSink`) para que las señales con severidad puedan llegar a consumidores futuros
-- [ ] Slice 4 — CRUD de campañas y aplicaciones sobre los repos RLS, aprovisionamiento de usuarios, aplicación de RBAC
+- [x] Slice 4 — CRUD de campañas y aplicaciones sobre los repos RLS (cada consulta dentro de `WithTenant`), aprovisionamiento de usuarios (UserService + UserRoleRepository), aplicación de RBAC (claim del rol más privilegiado al emitir el token, middleware `RequireRole`, matriz de rutas protegidas)
 - [ ] Slice 5 — frontend de demostración / demo desplegada
 
 ## Licencia
