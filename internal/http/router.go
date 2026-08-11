@@ -51,6 +51,13 @@ func (s *Server) Routes() http.Handler {
 	// Healthz: no rate limit (exempt in middleware)
 	mux.HandleFunc("GET /healthz", handlers.Health)
 
+	tenantsHandler := handlers.NewTenantsHandler(s.tenants, s.log)
+
+	// Tenant registry: public, credentials-free (AP2). The realm list must be
+	// readable before login so the demo screen can render the tenant selector;
+	// it is deliberately NOT gated by auth, role or rate limit.
+	mux.Handle("GET /api/v1/tenants", http.HandlerFunc(tenantsHandler.List))
+
 	// Auth routes: rate limit per IP, BEFORE auth (public routes)
 	mux.Handle("POST /api/v1/auth/login",
 		s.rateLimit(5, time.Minute)(http.HandlerFunc(authHandler.Login)))
