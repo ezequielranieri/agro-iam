@@ -128,6 +128,24 @@ func TestLoginResolutionErrorFailsClosed(t *testing.T) {
 	}
 }
 
+// TestLoginDeactivatedUserRejected proves a deactivated user cannot log in:
+// the IsActive guard aborts login with ErrUnauthorized before any token is
+// issued (R12 scenario 3).
+func TestLoginDeactivatedUserRejected(t *testing.T) {
+	deactivated := &domain.User{ID: "user-1", TenantID: "tenant-1", IsActive: false, PasswordHash: "hash"}
+	users := &fakeUserRepo{user: deactivated}
+	tokens := &recordingTokenManager{}
+	svc := newAuthTestService(users, nil, tokens, nil)
+
+	_, err := svc.Login(context.Background(), "tenant-1", "a@b.test", "pass")
+	if !errors.Is(err, domain.ErrUnauthorized) {
+		t.Fatalf("Login error = %v, want %v", err, domain.ErrUnauthorized)
+	}
+	if len(tokens.issued) != 0 {
+		t.Fatalf("issued tokens = %d, want 0 (deactivated user must not get tokens)", len(tokens.issued))
+	}
+}
+
 func validRefreshRecord() *ports.RefreshTokenRecord {
 	return &ports.RefreshTokenRecord{
 		ID: "rt-1", UserID: "user-1", TenantID: "tenant-1", FamilyID: "fam-1",
