@@ -9,6 +9,7 @@ import (
 
 	"github.com/ezequielranieri/agro-iam/internal/application/ports"
 	"github.com/ezequielranieri/agro-iam/internal/application/services"
+	"github.com/ezequielranieri/agro-iam/internal/domain"
 	"github.com/ezequielranieri/agro-iam/internal/http/claims"
 	"github.com/ezequielranieri/agro-iam/internal/http/handlers"
 	"github.com/ezequielranieri/agro-iam/internal/infrastructure/redis"
@@ -65,46 +66,46 @@ func (s *Server) Routes() http.Handler {
 
 	campaignsHandler := handlers.NewCampaignsHandler(s.campaigns, s.log)
 
-	// Campaign routes: reads for any authenticated user, writes also gated by
-	// RequireAuth here — the role guard (admin | agronomist) lands with
-	// RequireRole in PR D2 (R4/R15).
+	// Campaign routes: reads for any authenticated user; writes are gated by
+	// the RequireRole matrix (admin | agronomist, R4/R15). Composition is
+	// auth -> role -> rate limit, so a forbidden role never burns rate-limit
+	// quota (D6).
 	mux.Handle("GET /api/v1/campaigns",
 		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(campaignsHandler.List))))
 	mux.Handle("POST /api/v1/campaigns",
-		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(campaignsHandler.Create))))
+		s.requireAuth(s.requireRole(domain.RoleAdmin, domain.RoleAgronomist)(s.rateLimit(120, time.Minute)(http.HandlerFunc(campaignsHandler.Create)))))
 	mux.Handle("GET /api/v1/campaigns/{id}",
 		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(campaignsHandler.GetByID))))
 	mux.Handle("PATCH /api/v1/campaigns/{id}",
-		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(campaignsHandler.Update))))
+		s.requireAuth(s.requireRole(domain.RoleAdmin, domain.RoleAgronomist)(s.rateLimit(120, time.Minute)(http.HandlerFunc(campaignsHandler.Update)))))
 	mux.Handle("DELETE /api/v1/campaigns/{id}",
-		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(campaignsHandler.Delete))))
+		s.requireAuth(s.requireRole(domain.RoleAdmin, domain.RoleAgronomist)(s.rateLimit(120, time.Minute)(http.HandlerFunc(campaignsHandler.Delete)))))
 
 	applicationsHandler := handlers.NewApplicationsHandler(s.applications, s.log)
 
-	// Application routes: reads for any authenticated user, writes also gated
-	// by RequireAuth here — the role guard (admin | agronomist | producer)
-	// lands with RequireRole in PR D2 (R8).
+	// Application routes: reads for any authenticated user; writes are gated by
+	// the RequireRole matrix (admin | agronomist | producer, R8/R15).
 	mux.Handle("GET /api/v1/applications",
 		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.List))))
 	mux.Handle("POST /api/v1/applications",
-		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.Create))))
+		s.requireAuth(s.requireRole(domain.RoleAdmin, domain.RoleAgronomist, domain.RoleProducer)(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.Create)))))
 	mux.Handle("GET /api/v1/applications/{id}",
 		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.GetByID))))
 	mux.Handle("PATCH /api/v1/applications/{id}",
-		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.Update))))
+		s.requireAuth(s.requireRole(domain.RoleAdmin, domain.RoleAgronomist, domain.RoleProducer)(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.Update)))))
 	mux.Handle("DELETE /api/v1/applications/{id}",
-		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.Delete))))
+		s.requireAuth(s.requireRole(domain.RoleAdmin, domain.RoleAgronomist, domain.RoleProducer)(s.rateLimit(120, time.Minute)(http.HandlerFunc(applicationsHandler.Delete)))))
 
 	usersHandler := handlers.NewUsersHandler(s.users, s.log)
 
-	// Provisioning routes: guarded by RequireAuth here — the admin-only guard
-	// (R12) lands with RequireRole in PR D2.
+	// Provisioning routes: admin only (R12/R15). Every user route is gated —
+	// reads included — because the user directory is tenant-administrative data.
 	mux.Handle("POST /api/v1/users",
-		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(usersHandler.Create))))
+		s.requireAuth(s.requireRole(domain.RoleAdmin)(s.rateLimit(120, time.Minute)(http.HandlerFunc(usersHandler.Create)))))
 	mux.Handle("GET /api/v1/users",
-		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(usersHandler.List))))
+		s.requireAuth(s.requireRole(domain.RoleAdmin)(s.rateLimit(120, time.Minute)(http.HandlerFunc(usersHandler.List)))))
 	mux.Handle("PATCH /api/v1/users/{id}",
-		s.requireAuth(s.rateLimit(120, time.Minute)(http.HandlerFunc(usersHandler.Update))))
+		s.requireAuth(s.requireRole(domain.RoleAdmin)(s.rateLimit(120, time.Minute)(http.HandlerFunc(usersHandler.Update)))))
 
 	return s.chain(mux)
 }
@@ -112,6 +113,13 @@ func (s *Server) Routes() http.Handler {
 // requireAuth applies the JWT middleware bound to this server's token manager.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return RequireAuth(s.tokens)(next)
+}
+
+// requireRole applies the RBAC middleware with the given allowed role codes
+// (D6/D7). It must wrap a requireAuth-guarded handler, since it reads the role
+// claim from the request context.
+func (s *Server) requireRole(allowed ...string) func(http.Handler) http.Handler {
+	return RequireRole(allowed...)
 }
 
 // rateLimit applies the rate-limit middleware bound to this server's limiter.

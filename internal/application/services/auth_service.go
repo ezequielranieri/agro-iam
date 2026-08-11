@@ -19,6 +19,7 @@ type authService struct {
 	tenants       ports.TenantRepository
 	tokens        ports.TokenManager
 	hasher        ports.PasswordHasher
+	userRoles     ports.UserRoleRepository
 	refreshTokens ports.RefreshTokenRepository
 	signals       ports.BreachSignalSink
 	accessTTL     time.Duration
@@ -28,12 +29,14 @@ type authService struct {
 
 // NewAuthService wires the concrete ports into an AuthService. signals may be
 // nil (emission is a no-op). timeSource is injectable for deterministic tests;
-// pass time.Now when unsure.
+// pass time.Now when unsure. userRoles resolves the RBAC role claim embedded in
+// every issued access token (D3).
 func NewAuthService(
 	users ports.UserRepository,
 	tenants ports.TenantRepository,
 	tokens ports.TokenManager,
 	hasher ports.PasswordHasher,
+	userRoles ports.UserRoleRepository,
 	refreshTokens ports.RefreshTokenRepository,
 	signals ports.BreachSignalSink,
 	accessTTL time.Duration,
@@ -44,6 +47,7 @@ func NewAuthService(
 		tenants:       tenants,
 		tokens:        tokens,
 		hasher:        hasher,
+		userRoles:     userRoles,
 		refreshTokens: refreshTokens,
 		signals:       signals,
 		accessTTL:     accessTTL,
@@ -74,7 +78,15 @@ func (s *authService) Login(ctx context.Context, tenantID, email, password strin
 		return nil, domain.ErrUnauthorized
 	}
 
-	claims := ports.TokenClaims{UserID: user.ID, TenantID: user.TenantID, Role: ""}
+	// Resolve the role BEFORE issuing the token (D3). Fail-closed: a
+	// resolution error aborts the login rather than silently issuing a
+	// roleless token (R13).
+	role, err := resolveRole(ctx, s.userRoles, user.TenantID, user.ID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve role: %w", err)
+	}
+
+	claims := ports.TokenClaims{UserID: user.ID, TenantID: user.TenantID, Role: role}
 	access, err := s.tokens.Issue(claims)
 	if err != nil {
 		return nil, fmt.Errorf("issue access token: %w", err)
@@ -147,6 +159,15 @@ func (s *authService) Refresh(ctx context.Context, refreshToken string) (*ports.
 		return nil, domain.ErrUnauthorized
 
 	case RotationAllow:
+		// Resolve the role BEFORE any rotation side effect: a failed
+		// resolution must never burn a refresh-token rotation (R16). The
+		// re-issued access token needs the role claim embedded now —
+		// stateless tokens cannot lose RBAC on refresh (D3).
+		role, err := resolveRole(ctx, s.userRoles, record.TenantID, record.UserID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve role: %w", err)
+		}
+
 		// Generate the successor inside the same family.
 		next, err := NewRefreshToken(s.refreshTTL)
 		if err != nil {
@@ -173,6 +194,7 @@ func (s *authService) Refresh(ctx context.Context, refreshToken string) (*ports.
 		access, err := s.tokens.Issue(ports.TokenClaims{
 			UserID:   record.UserID,
 			TenantID: record.TenantID,
+			Role:     role,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("issue access token: %w", err)

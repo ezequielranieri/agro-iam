@@ -184,3 +184,89 @@ func TestUserRoutesRegisteredBehindAuth(t *testing.T) {
 		t.Fatalf("GET /api/v1/users with token: status = %d, want 200", rec.Code)
 	}
 }
+
+// TestRouteRoleMatrix proves the R15 route×role authorization matrix end to
+// end: write routes accept exactly their allowed role set, reads accept any
+// authenticated user, and a denied role collapses to the uniform 403 before
+// the handler runs.
+func TestRouteRoleMatrix(t *testing.T) {
+	tm := newTestTokenManager(t)
+	handler := NewServer(nil, tm, nil, &stubCampaignService{}, &stubApplicationService{}, &stubUserService{}, nil, nil, slog.New(slog.DiscardHandler)).Routes()
+
+	roles := []string{domain.RoleAdmin, domain.RoleAgronomist, domain.RoleProducer, domain.RoleAuditor, domain.RoleHauler, ""}
+
+	routes := []struct {
+		name   string
+		method string
+		path   string
+		allow  []string // nil = any authenticated role (including roleless)
+	}{
+		// Reads: any authenticated user.
+		{"campaign list", http.MethodGet, "/api/v1/campaigns", nil},
+		{"campaign get", http.MethodGet, "/api/v1/campaigns/c-1", nil},
+		{"application list", http.MethodGet, "/api/v1/applications", nil},
+		{"application get", http.MethodGet, "/api/v1/applications/a-1", nil},
+		// Campaign writes: admin | agronomist.
+		{"campaign create", http.MethodPost, "/api/v1/campaigns", []string{domain.RoleAdmin, domain.RoleAgronomist}},
+		{"campaign update", http.MethodPatch, "/api/v1/campaigns/c-1", []string{domain.RoleAdmin, domain.RoleAgronomist}},
+		{"campaign delete", http.MethodDelete, "/api/v1/campaigns/c-1", []string{domain.RoleAdmin, domain.RoleAgronomist}},
+		// Application writes: admin | agronomist | producer.
+		{"application create", http.MethodPost, "/api/v1/applications", []string{domain.RoleAdmin, domain.RoleAgronomist, domain.RoleProducer}},
+		{"application update", http.MethodPatch, "/api/v1/applications/a-1", []string{domain.RoleAdmin, domain.RoleAgronomist, domain.RoleProducer}},
+		{"application delete", http.MethodDelete, "/api/v1/applications/a-1", []string{domain.RoleAdmin, domain.RoleAgronomist, domain.RoleProducer}},
+		// Provisioning: admin only (reads included, R12).
+		{"user create", http.MethodPost, "/api/v1/users", []string{domain.RoleAdmin}},
+		{"user list", http.MethodGet, "/api/v1/users", []string{domain.RoleAdmin}},
+		{"user update", http.MethodPatch, "/api/v1/users/u-1", []string{domain.RoleAdmin}},
+	}
+
+	for _, route := range routes {
+		for _, role := range roles {
+			t.Run(route.name+"/"+role, func(t *testing.T) {
+				wantAllowed := route.allow == nil
+				for _, allowed := range route.allow {
+					if allowed == role {
+						wantAllowed = true
+						break
+					}
+				}
+
+				token := issueAccessToken(t, tm, ports.TokenClaims{UserID: "user-1", TenantID: "tenant-1", Role: role})
+				req := httptest.NewRequest(route.method, route.path, nil)
+				req.Header.Set("Authorization", "Bearer "+token)
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+
+				if wantAllowed {
+					if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
+						t.Fatalf("role %q allowed on %s %s but got %d", role, route.method, route.path, rec.Code)
+					}
+					return
+				}
+				if rec.Code != http.StatusForbidden {
+					t.Fatalf("role %q denied on %s %s: got %d, want 403", role, route.method, route.path, rec.Code)
+				}
+				if got := rec.Body.String(); got != "{\"error\":\"forbidden\"}\n" {
+					t.Fatalf("denied body = %q, want uniform forbidden JSON", got)
+				}
+			})
+		}
+	}
+}
+
+// TestAuthRoutesStayPublic proves the auth endpoints are unchanged: they carry
+// no auth or role guard, so an unauthenticated request never sees 401/403.
+func TestAuthRoutesStayPublic(t *testing.T) {
+	handler := NewServer(nil, newTestTokenManager(t), nil, &stubCampaignService{}, &stubApplicationService{}, &stubUserService{}, nil, nil, slog.New(slog.DiscardHandler)).Routes()
+
+	for _, p := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/auth/login"},
+		{http.MethodPost, "/api/v1/auth/refresh"},
+	} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(p.method, p.path, nil))
+		if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+			t.Fatalf("%s %s: status = %d, auth routes must stay public (no auth/role guard)", p.method, p.path, rec.Code)
+		}
+	}
+}
