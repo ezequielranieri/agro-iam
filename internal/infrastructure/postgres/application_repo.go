@@ -30,7 +30,12 @@ func NewApplicationRepo(pool *pgxpool.Pool) *ApplicationRepo {
 // Compile-time contract: ApplicationRepo satisfies ports.ApplicationRepository.
 var _ ports.ApplicationRepository = (*ApplicationRepo)(nil)
 
-const applicationColumns = `id, tenant_id, lot_id, campaign_id, product_name, dose, applied_at, operator_id, notes, created_at, updated_at`
+const applicationColumns = `id, tenant_id, lot_id, campaign_id, product_name, dose, applied_at, operator_id, notes, created_at, updated_at, ` +
+	// operator_name is resolved at read time (S1.9): the full_name subquery
+	// runs under the SAME RLS tenant context as the row, so it can only see a
+	// same-tenant operator; a NULL, missing or foreign operator_id yields ""
+	// via COALESCE — never another tenant's name.
+	`COALESCE((SELECT full_name FROM app.users WHERE id = operator_id), '') AS operator_name`
 
 func scanApplication(row pgx.Row) (*domain.Application, error) {
 	var a domain.Application
@@ -40,6 +45,7 @@ func scanApplication(row pgx.Row) (*domain.Application, error) {
 	if err := row.Scan(
 		&a.ID, &a.TenantID, &a.LotID, &a.CampaignID, &a.ProductName, &a.Dose,
 		&a.AppliedAt, &operatorID, &a.Notes, &a.CreatedAt, &a.UpdatedAt,
+		&a.OperatorName,
 	); err != nil {
 		return nil, err
 	}

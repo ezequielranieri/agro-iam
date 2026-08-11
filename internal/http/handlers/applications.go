@@ -28,30 +28,33 @@ func NewApplicationsHandler(applications ports.ApplicationService, log *slog.Log
 }
 
 // applicationResponse is the stable JSON shape of an application. OperatorID
-// is nullable: an empty operator renders as JSON null.
+// is nullable: an empty operator renders as JSON null. OperatorName is the
+// server-resolved full name (S1.9) — never a client claim.
 type applicationResponse struct {
-	ID          string  `json:"id"`
-	LotID       string  `json:"lot_id"`
-	CampaignID  string  `json:"campaign_id"`
-	ProductName string  `json:"product_name"`
-	Dose        string  `json:"dose"`
-	AppliedAt   string  `json:"applied_at"`
-	OperatorID  *string `json:"operator_id"`
-	Notes       string  `json:"notes"`
-	CreatedAt   string  `json:"created_at"`
+	ID           string  `json:"id"`
+	LotID        string  `json:"lot_id"`
+	CampaignID   string  `json:"campaign_id"`
+	ProductName  string  `json:"product_name"`
+	Dose         string  `json:"dose"`
+	AppliedAt    string  `json:"applied_at"`
+	OperatorID   *string `json:"operator_id"`
+	OperatorName string  `json:"operator_name"`
+	Notes        string  `json:"notes"`
+	CreatedAt    string  `json:"created_at"`
 }
 
 func toApplicationResponse(a *domain.Application) applicationResponse {
 	return applicationResponse{
-		ID:          a.ID,
-		LotID:       a.LotID,
-		CampaignID:  a.CampaignID,
-		ProductName: a.ProductName,
-		Dose:        a.Dose,
-		AppliedAt:   a.AppliedAt.UTC().Format(time.RFC3339),
-		OperatorID:  nullableStringPtr(a.OperatorID),
-		Notes:       a.Notes,
-		CreatedAt:   a.CreatedAt.UTC().Format(time.RFC3339),
+		ID:           a.ID,
+		LotID:        a.LotID,
+		CampaignID:   a.CampaignID,
+		ProductName:  a.ProductName,
+		Dose:         a.Dose,
+		AppliedAt:    a.AppliedAt.UTC().Format(time.RFC3339),
+		OperatorID:   nullableStringPtr(a.OperatorID),
+		OperatorName: a.OperatorName,
+		Notes:        a.Notes,
+		CreatedAt:    a.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
