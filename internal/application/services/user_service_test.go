@@ -30,7 +30,13 @@ func (f *fakeUserRoleRepo) ListByUser(ctx context.Context, tenantID, userID stri
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
-	return f.roles, nil
+	var owned []*domain.UserRole
+	for _, r := range f.roles {
+		if r.UserID == userID {
+			owned = append(owned, r)
+		}
+	}
+	return owned, nil
 }
 
 func newUserServiceTestHarness(users *fakeUserRepo, roles *fakeUserRoleRepo, sink *recordingSink) ports.UserService {
@@ -216,6 +222,43 @@ func TestUserServiceListUsers(t *testing.T) {
 
 	if _, err := svc.ListUsers(context.Background(), ""); !errors.Is(err, domain.ErrTenantRequired) {
 		t.Fatalf("ListUsers empty tenant error = %v, want ErrTenantRequired", err)
+	}
+}
+
+// TestUserServiceListUsersResolvesRoles proves every listed user carries its
+// server-resolved role (R13 precedence: admin > agronomist > producer >
+// auditor > hauler), roleless users stay "", and a membership lookup failure
+// propagates — a role that cannot be resolved must never be silently dropped
+// (fail closed).
+func TestUserServiceListUsersResolvesRoles(t *testing.T) {
+	users := &fakeUserRepo{list: []*domain.User{
+		{ID: "u-admin", TenantID: "tenant-1", Email: "a@test.local", FullName: "A"},
+		{ID: "u-roleless", TenantID: "tenant-1", Email: "b@test.local", FullName: "B"},
+	}}
+	roles := &fakeUserRoleRepo{roles: []*domain.UserRole{
+		{UserID: "u-admin", RoleCode: domain.RoleProducer, TenantID: "tenant-1"},
+		{UserID: "u-admin", RoleCode: domain.RoleAdmin, TenantID: "tenant-1"},
+	}}
+	svc := newUserServiceTestHarness(users, roles, nil)
+
+	got, err := svc.ListUsers(context.Background(), "tenant-1")
+	if err != nil {
+		t.Fatalf("ListUsers: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListUsers = %d users, want 2", len(got))
+	}
+	if got[0].Role != domain.RoleAdmin {
+		t.Fatalf("u-admin role = %q, want %q (most privileged of producer+admin)", got[0].Role, domain.RoleAdmin)
+	}
+	if got[1].Role != "" {
+		t.Fatalf("u-roleless role = %q, want empty", got[1].Role)
+	}
+
+	failing := &fakeUserRoleRepo{listErr: errors.New("boom")}
+	svcFail := newUserServiceTestHarness(&fakeUserRepo{list: users.list}, failing, nil)
+	if _, err := svcFail.ListUsers(context.Background(), "tenant-1"); err == nil {
+		t.Fatal("ListUsers with failing membership lookup: err = nil, want failure (fail closed)")
 	}
 }
 

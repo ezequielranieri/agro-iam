@@ -75,19 +75,37 @@ func (s *userService) CreateUser(ctx context.Context, tenantID, actorUserID stri
 	}); err != nil {
 		return nil, err
 	}
+	// The just-assigned role IS the resolved role: record it so the returned
+	// user carries the same derived field ListUsers fills (no extra query).
+	user.Role = in.Role
 
 	emitEvent(ctx, s.signals, tenantID, actorUserID, "", false,
 		&Event{Action: "user.create", Severity: domain.SeverityInfo, EmitAudit: true}, "")
 	return user, nil
 }
 
-// ListUsers returns every user of the tenant. The tenant id is the scoping key
-// the repository threads into the RLS transaction.
+// ListUsers returns every user of the tenant with its server-resolved role
+// (R13 precedence, one membership lookup per user — an accepted N+1: the
+// lookups are single indexed queries and user counts are small). A lookup
+// failure propagates so a role that cannot be resolved is never silently
+// dropped (fail closed). The tenant id is the scoping key the repository
+// threads into the RLS transaction.
 func (s *userService) ListUsers(ctx context.Context, tenantID string) ([]*domain.User, error) {
 	if tenantID == "" {
 		return nil, domain.ErrTenantRequired
 	}
-	return s.users.List(ctx, tenantID)
+	users, err := s.users.List(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for _, u := range users {
+		role, err := resolveRole(ctx, s.userRoles, tenantID, u.ID)
+		if err != nil {
+			return nil, err
+		}
+		u.Role = role
+	}
+	return users, nil
 }
 
 // UpdateUser replaces the mutable fields of an existing user (full_name,
@@ -114,6 +132,13 @@ func (s *userService) UpdateUser(ctx context.Context, tenantID, actorUserID, id 
 	if err := s.users.Update(ctx, user); err != nil {
 		return nil, err
 	}
+	// Re-resolve the role so the returned user carries the same derived field
+	// ListUsers fills (membership may have changed between issue and update).
+	role, err := resolveRole(ctx, s.userRoles, tenantID, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	user.Role = role
 	return user, nil
 }
 

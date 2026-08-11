@@ -166,7 +166,7 @@ func TestUsersCreateUnauthenticated(t *testing.T) {
 
 func TestUsersList(t *testing.T) {
 	want := []*domain.User{
-		{ID: "u-1", TenantID: "tenant-1", Email: "a@esperanza.coop", PasswordHash: "hash", FullName: "A", IsActive: true},
+		{ID: "u-1", TenantID: "tenant-1", Email: "a@esperanza.coop", PasswordHash: "hash", FullName: "A", IsActive: true, Role: "producer"},
 		{ID: "u-2", TenantID: "tenant-1", Email: "b@esperanza.coop", PasswordHash: "hash", FullName: "B", IsActive: false},
 	}
 	f := &fakeUserService{list: want}
@@ -197,6 +197,9 @@ func TestUsersList(t *testing.T) {
 	}
 	if resp.Users[1]["is_active"] != false {
 		t.Fatalf("user u-2 is_active = %v, want false (toggle visible)", resp.Users[1]["is_active"])
+	}
+	if resp.Users[0]["role"] != "producer" {
+		t.Fatalf("user u-1 role = %v, want producer (server-resolved, S1.8)", resp.Users[0]["role"])
 	}
 }
 

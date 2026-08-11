@@ -29,12 +29,13 @@ func NewUsersHandler(users ports.UserService, log *slog.Logger) *UsersHandler {
 
 // userResponse is the stable JSON shape of a user. PasswordHash is
 // deliberately absent: provisioning responses never carry password material
-// (R9).
+// (R9). Role is the server-resolved membership (S1.8) — never a client claim.
 type userResponse struct {
 	ID        string `json:"id"`
 	Email     string `json:"email"`
 	FullName  string `json:"full_name"`
 	IsActive  bool   `json:"is_active"`
+	Role      string `json:"role"`
 	CreatedAt string `json:"created_at"`
 }
 
@@ -44,6 +45,7 @@ func toUserResponse(u *domain.User) userResponse {
 		Email:     u.Email,
 		FullName:  u.FullName,
 		IsActive:  u.IsActive,
+		Role:      u.Role,
 		CreatedAt: u.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }

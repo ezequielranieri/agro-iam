@@ -16,8 +16,14 @@ type User struct {
 	PasswordHash string
 	FullName     string
 	IsActive     bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// Role is the single most-privileged membership the user holds in the
+	// tenant. It is DERIVED, not persisted: the users row carries no role
+	// column — memberships live in user_roles. The application layer fills it
+	// (ListUsers resolves it per user, R13), repositories never scan it, and
+	// IsValid deliberately ignores it.
+	Role      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // IsValid checks structural invariants. Password strength is a policy concern
