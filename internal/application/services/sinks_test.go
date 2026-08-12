@@ -45,6 +45,10 @@ func (f *fakeAudit) Record(ctx context.Context, tenantID, actorUserID, action, e
 
 func (f *fakeAudit) VerifyChain(ctx context.Context, tenantID string) (int64, error) { return 0, nil }
 
+func (f *fakeAudit) Latest(ctx context.Context, tenantID string, limit int) ([]*domain.AuditEntry, error) {
+	return nil, nil
+}
+
 // recordingSink records every SignalEvent it receives; it can be configured to
 // fail or panic so the fan-out behavior is observable.
 type recordingSink struct {

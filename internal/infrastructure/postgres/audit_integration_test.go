@@ -264,3 +264,80 @@ func TestAuditChainingUniqueTenantSeq(t *testing.T) {
 		t.Fatalf("duplicate (tenant, seq) Append err = %v, want domain.ErrConflict", err)
 	}
 }
+
+// TestAuditListRecentRLSAndLimit proves the AP1 read path against a live
+// database: ListRecent returns the tenant's own entries newest first (ORDER BY
+// seq DESC), honors the LIMIT window, and FORCE RLS keeps every other tenant's
+// rows invisible — including a raw no-context count that must see zero rows.
+func TestAuditListRecentRLSAndLimit(t *testing.T) {
+	ctx := setupIntegrationTest(t)
+	tenantRepo := NewTenantRepo(testPool)
+	tenantA := createTestTenant(ctx, t, tenantRepo, "Audit Coop A")
+	tenantB := createTestTenant(ctx, t, tenantRepo, "Audit Coop B")
+
+	repo := NewAuditRepo(testPool)
+	userRepo := NewUserRepo(testPool)
+	svc := services.NewAuditService(repo, discardTestLogger())
+	actorA := createAuditActor(ctx, t, userRepo, tenantA.ID, "actor-a@recent.test")
+	actorB := createAuditActor(ctx, t, userRepo, tenantB.ID, "actor-b@recent.test")
+	for i := 1; i <= 5; i++ {
+		if err := svc.Record(ctx, tenantA.ID, actorA.ID, "auth.login", "user", "a-1", []byte(`{"n":1}`), ""); err != nil {
+			t.Fatalf("Record A%d: %v", i, err)
+		}
+	}
+	for i := 1; i <= 3; i++ {
+		if err := svc.Record(ctx, tenantB.ID, actorB.ID, "auth.login", "user", "b-1", []byte(`{"n":1}`), ""); err != nil {
+			t.Fatalf("Record B%d: %v", i, err)
+		}
+	}
+
+	// Full window: newest first (seq DESC), only A's own 5 rows.
+	all, err := repo.ListRecent(ctx, tenantA.ID, 100)
+	if err != nil {
+		t.Fatalf("ListRecent(A, 100): %v", err)
+	}
+	if len(all) != 5 {
+		t.Fatalf("ListRecent(A, 100) = %d entries, want 5", len(all))
+	}
+	for i, e := range all {
+		if e.Seq != int64(5-i) {
+			t.Fatalf("ListRecent order[%d] seq = %d, want %d (newest first)", i, e.Seq, int64(5-i))
+		}
+		if e.TenantID != tenantA.ID {
+			t.Fatalf("ListRecent leaked tenant %q row into A", e.TenantID)
+		}
+	}
+
+	// LIMIT window: exactly the newest N, still newest first.
+	two, err := repo.ListRecent(ctx, tenantA.ID, 2)
+	if err != nil {
+		t.Fatalf("ListRecent(A, 2): %v", err)
+	}
+	if len(two) != 2 || two[0].Seq != 5 || two[1].Seq != 4 {
+		t.Fatalf("ListRecent(A, 2) = %+v, want newest 2 (seq 5,4)", two)
+	}
+
+	// B sees only its own rows, no spillover from A.
+	allB, err := repo.ListRecent(ctx, tenantB.ID, 100)
+	if err != nil {
+		t.Fatalf("ListRecent(B): %v", err)
+	}
+	if len(allB) != 3 {
+		t.Fatalf("ListRecent(B) = %d entries, want 3 (B owns exactly three)", len(allB))
+	}
+	for _, e := range allB {
+		if e.TenantID != tenantB.ID {
+			t.Fatalf("ListRecent leaked tenant %q row into B", e.TenantID)
+		}
+	}
+
+	// No tenant context: FORCE RLS must expose zero rows — the repository is
+	// never the isolation mechanism.
+	var rawCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM app.audit_log`).Scan(&rawCount); err != nil {
+		t.Fatalf("count without tenant context: %v", err)
+	}
+	if rawCount != 0 {
+		t.Fatalf("raw SELECT without tenant context saw %d rows; FORCE RLS must expose 0", rawCount)
+	}
+}

@@ -206,4 +206,9 @@ type AuditService interface {
 	// returns the first broken seq (0 = intact). Internal only — there is no
 	// public endpoint.
 	VerifyChain(ctx context.Context, tenantID string) (int64, error)
+	// Latest returns the tenant's most recent `limit` entries, newest first
+	// (seq DESC). It is the read side of the admin audit screen (AP1): the
+	// repository runs the query inside WithTenant, so RLS — not a WHERE
+	// clause — guarantees a tenant can never read another's trail.
+	Latest(ctx context.Context, tenantID string, limit int) ([]*domain.AuditEntry, error)
 }

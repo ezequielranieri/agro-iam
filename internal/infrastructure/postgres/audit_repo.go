@@ -113,3 +113,41 @@ func (r *AuditRepo) ListByTenant(ctx context.Context, tenantID string) ([]*domai
 	}
 	return entries, nil
 }
+
+// ListRecent returns the tenant's most recent entries, newest first (ORDER BY
+// seq DESC LIMIT $1). It runs inside WithTenant like every read, so FORCE RLS
+// — not a tenant_id WHERE — guarantees a tenant can never see another's rows
+// (AP1). NULL actor/entity/payload read back exactly like ListByTenant so the
+// demo response and chain verification share the same canonical shape.
+func (r *AuditRepo) ListRecent(ctx context.Context, tenantID string, limit int) ([]*domain.AuditEntry, error) {
+	var entries []*domain.AuditEntry
+	err := WithTenant(ctx, r.pool, tenantID, func(tx pgxTx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT id, tenant_id,
+			        COALESCE(actor_user_id::text, ''),
+			        action, entity_type,
+			        COALESCE(entity_id, ''),
+			        COALESCE(payload, 'null'::jsonb),
+			        created_at, seq, prev_hash, chain_hash, severity
+			 FROM app.audit_log ORDER BY seq DESC LIMIT $1`, limit)
+		if err != nil {
+			return fmt.Errorf("list recent audit entries: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var e domain.AuditEntry
+			if err := rows.Scan(&e.ID, &e.TenantID, &e.ActorUserID, &e.Action,
+				&e.EntityType, &e.EntityID, &e.Payload, &e.CreatedAt,
+				&e.Seq, &e.PrevHash, &e.ChainHash, &e.Severity); err != nil {
+				return fmt.Errorf("scan recent audit entry: %w", err)
+			}
+			entries = append(entries, &e)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
