@@ -76,11 +76,14 @@ func (f *fakeTenantRepo) FindByID(ctx context.Context, id string) (*domain.Tenan
 	return &domain.Tenant{ID: id, Name: "Test"}, nil
 }
 func (f *fakeTenantRepo) Create(ctx context.Context, tenant *domain.Tenant) error { return nil }
+func (f *fakeTenantRepo) List(ctx context.Context) ([]*domain.Tenant, error)      { return nil, nil }
 
 // fakeTokenManager implements ports.TokenManager.
 type fakeTokenManager struct{}
 
-func (f *fakeTokenManager) Issue(claims ports.TokenClaims) (string, error) { return "access-token", nil }
+func (f *fakeTokenManager) Issue(claims ports.TokenClaims) (string, error) {
+	return "access-token", nil
+}
 func (f *fakeTokenManager) Verify(token string) (*ports.TokenClaims, error) {
 	return &ports.TokenClaims{}, nil
 }

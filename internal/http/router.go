@@ -25,6 +25,7 @@ type Server struct {
 	applications ports.ApplicationService
 	users        ports.UserService
 	audit        ports.AuditService
+	tenants      ports.TenantRepository
 	rateLimiter  *redis.RateLimiter
 	signals      ports.BreachSignalSink
 	log          *slog.Logger
@@ -33,8 +34,8 @@ type Server struct {
 // NewServer builds the server with its dependencies.
 // rateLimiter may be nil (rate limiting disabled); signals may be nil (breach
 // emission is a no-op).
-func NewServer(auth ports.AuthService, tokens ports.TokenManager, lots ports.LotService, campaigns ports.CampaignService, applications ports.ApplicationService, users ports.UserService, audit ports.AuditService, rateLimiter *redis.RateLimiter, signals ports.BreachSignalSink, log *slog.Logger) *Server {
-	return &Server{auth: auth, tokens: tokens, lots: lots, campaigns: campaigns, applications: applications, users: users, audit: audit, rateLimiter: rateLimiter, signals: signals, log: log}
+func NewServer(auth ports.AuthService, tokens ports.TokenManager, lots ports.LotService, campaigns ports.CampaignService, applications ports.ApplicationService, users ports.UserService, audit ports.AuditService, tenants ports.TenantRepository, rateLimiter *redis.RateLimiter, signals ports.BreachSignalSink, log *slog.Logger) *Server {
+	return &Server{auth: auth, tokens: tokens, lots: lots, campaigns: campaigns, applications: applications, users: users, audit: audit, tenants: tenants, rateLimiter: rateLimiter, signals: signals, log: log}
 }
 
 // Routes assembles the stdlib ServeMux. Path parameters use the Go 1.22
@@ -50,6 +51,13 @@ func (s *Server) Routes() http.Handler {
 
 	// Healthz: no rate limit (exempt in middleware)
 	mux.HandleFunc("GET /healthz", handlers.Health)
+
+	tenantsHandler := handlers.NewTenantsHandler(s.tenants, s.log)
+
+	// Tenant registry: public, credentials-free (AP2). The realm list must be
+	// readable before login so the demo screen can render the tenant selector;
+	// it is deliberately NOT gated by auth, role or rate limit.
+	mux.Handle("GET /api/v1/tenants", http.HandlerFunc(tenantsHandler.List))
 
 	// Auth routes: rate limit per IP, BEFORE auth (public routes)
 	mux.Handle("POST /api/v1/auth/login",

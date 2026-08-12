@@ -30,6 +30,9 @@ type UserRepository interface {
 type TenantRepository interface {
 	FindByID(ctx context.Context, id string) (*domain.Tenant, error)
 	Create(ctx context.Context, tenant *domain.Tenant) error
+	// List returns every tenant of the global registry (id+name), read at
+	// request time so the public realm list survives reseeds (AP2).
+	List(ctx context.Context) ([]*domain.Tenant, error)
 }
 
 // LotRepository persists lots, always scoped to the tenant session.
