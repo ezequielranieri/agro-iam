@@ -96,7 +96,7 @@ func decodeApplicationError(t *testing.T, rec *httptest.ResponseRecorder) string
 
 func TestApplicationsList(t *testing.T) {
 	applied := time.Date(2026, 2, 10, 9, 30, 0, 0, time.UTC)
-	want := &domain.Application{ID: "a-1", TenantID: "tenant-1", ProductName: "Glifosato", AppliedAt: applied}
+	want := &domain.Application{ID: "a-1", TenantID: "tenant-1", ProductName: "Glifosato", AppliedAt: applied, OperatorName: "Ana Operadora"}
 	f := &fakeApplicationService{list: []*domain.Application{want}}
 	h := newApplicationsTestHandler(f)
 
@@ -114,6 +114,9 @@ func TestApplicationsList(t *testing.T) {
 	}
 	if len(resp.Applications) != 1 || resp.Applications[0].ID != "a-1" || resp.Applications[0].ProductName != "Glifosato" {
 		t.Fatalf("applications = %+v, want [a-1/Glifosato]", resp.Applications)
+	}
+	if resp.Applications[0].OperatorName != "Ana Operadora" {
+		t.Fatalf("operator_name = %q, want Ana Operadora (S1.9)", resp.Applications[0].OperatorName)
 	}
 }
 

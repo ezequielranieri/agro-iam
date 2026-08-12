@@ -13,9 +13,14 @@ type Application struct {
 	Dose        string
 	AppliedAt   time.Time
 	OperatorID  string
-	Notes       string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// OperatorName is the operator's full name, DERIVED at read time by an
+	// RLS-scoped lookup on app.users (the application row stores only the
+	// operator_id). It is never persisted and never written; a missing or
+	// foreign operator resolves to "".
+	OperatorName string
+	Notes        string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // IsValid checks structural invariants. Product name and both FKs are required.

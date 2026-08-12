@@ -581,6 +581,7 @@ func TestCrossTenantInsertBlocked(t *testing.T) {
 		t.Fatalf("rejected INSERT left %d rows behind", count)
 	}
 }
+
 // TestCampaignRepoUpdateDelete proves the CRUD half of the R1 rewrite: Update
 // is a full-row replace inside WithTenant, and a missing row — whether
 // nonexistent or owned by another tenant (hidden by RLS) — surfaces as
@@ -637,6 +638,73 @@ func TestCampaignRepoUpdateDelete(t *testing.T) {
 	}
 	if err := campaignRepo.Delete(ctx, tenantB.ID, campaign.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("cross-tenant Delete err = %v, want domain.ErrNotFound", err)
+	}
+}
+
+func TestApplicationOperatorNameResolvedByRLS(t *testing.T) {
+	ctx := setupIntegrationTest(t)
+	tenantRepo := NewTenantRepo(testPool)
+	userRepo := NewUserRepo(testPool)
+	applicationRepo := NewApplicationRepo(testPool)
+
+	tenantA := createTestTenant(ctx, t, tenantRepo, "Coop A")
+	tenantB := createTestTenant(ctx, t, tenantRepo, "Coop B")
+
+	// One same-tenant operator (A) and one foreign operator (B) so the RLS
+	// scoping of the resolution is provable.
+	operatorA := &domain.User{
+		ID: newUUID(t), TenantID: tenantA.ID, Email: "op-a@test.local",
+		PasswordHash: "hash", FullName: "Ana Operadora", IsActive: true,
+	}
+	operatorB := &domain.User{
+		ID: newUUID(t), TenantID: tenantB.ID, Email: "op-b@test.local",
+		PasswordHash: "hash", FullName: "Berta Foránea", IsActive: true,
+	}
+	if err := userRepo.Create(ctx, operatorA); err != nil {
+		t.Fatalf("create operator A: %v", err)
+	}
+	if err := userRepo.Create(ctx, operatorB); err != nil {
+		t.Fatalf("create operator B: %v", err)
+	}
+
+	makeApp := func(operatorID string) *domain.Application {
+		app := &domain.Application{
+			ID: newUUID(t), TenantID: tenantA.ID, LotID: newUUID(t),
+			CampaignID: newUUID(t), ProductName: "Glifosato", Dose: "3 l/ha",
+			AppliedAt: time.Now().UTC().Truncate(time.Second), Notes: "op-name test",
+			OperatorID: operatorID,
+		}
+		if err := applicationRepo.Create(ctx, app); err != nil {
+			t.Fatalf("create application: %v", err)
+		}
+		return app
+	}
+	withSameTenant := makeApp(operatorA.ID)
+	withForeign := makeApp(operatorB.ID)
+	// A NULL operator_id resolves to "" (COALESCE default); create it before
+	// List so it is present in the returned set.
+	noOperator := makeApp("")
+
+	apps, err := applicationRepo.List(ctx, tenantA.ID)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	byID := map[string]*domain.Application{}
+	for _, a := range apps {
+		byID[a.ID] = a
+	}
+	if got := byID[withSameTenant.ID].OperatorName; got != "Ana Operadora" {
+		t.Fatalf("same-tenant operator_name = %q, want Ana Operadora", got)
+	}
+	// The foreign operator's name must NOT resolve: the full_name subquery runs
+	// under tenant A's RLS and cannot see B's user row (fail-closed to "").
+	if got := byID[withForeign.ID].OperatorName; got != "" {
+		t.Fatalf("cross-tenant operator_name = %q, want \"\" (RLS-scoped, no leak)", got)
+	}
+
+	// A NULL operator_id resolves to "" (COALESCE default).
+	if got := byID[noOperator.ID].OperatorName; got != "" {
+		t.Fatalf("NULL operator_name = %q, want \"\"", got)
 	}
 }
 
