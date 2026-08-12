@@ -68,13 +68,29 @@ func (s *stubUserService) UpdateUser(ctx context.Context, tenantID, actorUserID,
 	return nil, domain.ErrInvalidInput
 }
 
+// stubAuditService answers the audit reads with a harmless result; the route
+// tests only prove registration, auth/role guarding and handler wiring, so the
+// responses never matter.
+type stubAuditService struct{}
+
+func (s *stubAuditService) Record(ctx context.Context, tenantID, actorUserID, action, entityType, entityID string,
+	payload []byte, severity string) error {
+	return nil
+}
+func (s *stubAuditService) VerifyChain(ctx context.Context, tenantID string) (int64, error) {
+	return 0, nil
+}
+func (s *stubAuditService) Latest(ctx context.Context, tenantID string, limit int) ([]*domain.AuditEntry, error) {
+	return nil, nil
+}
+
 // TestCampaignRoutesRegisteredBehindAuth proves the five campaign routes exist
 // on the mux and every one is RequireAuth-protected: unauthenticated requests
 // get the uniform 401, and an authenticated request reaches the handler (200
 // from the stub list), not just the middleware.
 func TestCampaignRoutesRegisteredBehindAuth(t *testing.T) {
 	tm := newTestTokenManager(t)
-	handler := NewServer(nil, tm, nil, &stubCampaignService{}, &stubApplicationService{}, &stubUserService{}, nil, nil, slog.New(slog.DiscardHandler)).Routes()
+	handler := NewServer(nil, tm, nil, &stubCampaignService{}, &stubApplicationService{}, &stubUserService{}, &stubAuditService{}, nil, nil, slog.New(slog.DiscardHandler)).Routes()
 
 	// Unauthenticated: each campaign route collapses to 401, which proves the
 	// route is registered AND behind RequireAuth (a missing route would 404).
@@ -118,7 +134,7 @@ func TestCampaignRoutesRegisteredBehindAuth(t *testing.T) {
 // handler (200 from the stub list), not just the middleware.
 func TestApplicationRoutesRegisteredBehindAuth(t *testing.T) {
 	tm := newTestTokenManager(t)
-	handler := NewServer(nil, tm, nil, &stubCampaignService{}, &stubApplicationService{}, &stubUserService{}, nil, nil, slog.New(slog.DiscardHandler)).Routes()
+	handler := NewServer(nil, tm, nil, &stubCampaignService{}, &stubApplicationService{}, &stubUserService{}, &stubAuditService{}, nil, nil, slog.New(slog.DiscardHandler)).Routes()
 
 	// Unauthenticated: each application route collapses to 401, which proves
 	// the route is registered AND behind RequireAuth (a missing route would 404).
@@ -156,7 +172,7 @@ func TestApplicationRoutesRegisteredBehindAuth(t *testing.T) {
 // guard (R12) lands with RequireRole in PR D2.
 func TestUserRoutesRegisteredBehindAuth(t *testing.T) {
 	tm := newTestTokenManager(t)
-	handler := NewServer(nil, tm, nil, &stubCampaignService{}, &stubApplicationService{}, &stubUserService{}, nil, nil, slog.New(slog.DiscardHandler)).Routes()
+	handler := NewServer(nil, tm, nil, &stubCampaignService{}, &stubApplicationService{}, &stubUserService{}, &stubAuditService{}, nil, nil, slog.New(slog.DiscardHandler)).Routes()
 
 	// Unauthenticated: each user route collapses to 401, which proves the
 	// route is registered AND behind RequireAuth (a missing route would 404).
@@ -191,7 +207,7 @@ func TestUserRoutesRegisteredBehindAuth(t *testing.T) {
 // the handler runs.
 func TestRouteRoleMatrix(t *testing.T) {
 	tm := newTestTokenManager(t)
-	handler := NewServer(nil, tm, nil, &stubCampaignService{}, &stubApplicationService{}, &stubUserService{}, nil, nil, slog.New(slog.DiscardHandler)).Routes()
+	handler := NewServer(nil, tm, nil, &stubCampaignService{}, &stubApplicationService{}, &stubUserService{}, &stubAuditService{}, nil, nil, slog.New(slog.DiscardHandler)).Routes()
 
 	roles := []string{domain.RoleAdmin, domain.RoleAgronomist, domain.RoleProducer, domain.RoleAuditor, domain.RoleHauler, ""}
 
@@ -218,6 +234,8 @@ func TestRouteRoleMatrix(t *testing.T) {
 		{"user create", http.MethodPost, "/api/v1/users", []string{domain.RoleAdmin}},
 		{"user list", http.MethodGet, "/api/v1/users", []string{domain.RoleAdmin}},
 		{"user update", http.MethodPatch, "/api/v1/users/u-1", []string{domain.RoleAdmin}},
+		// Audit trail: admin only (AP1).
+		{"audit list", http.MethodGet, "/api/v1/audit", []string{domain.RoleAdmin}},
 	}
 
 	for _, route := range routes {
@@ -257,7 +275,7 @@ func TestRouteRoleMatrix(t *testing.T) {
 // TestAuthRoutesStayPublic proves the auth endpoints are unchanged: they carry
 // no auth or role guard, so an unauthenticated request never sees 401/403.
 func TestAuthRoutesStayPublic(t *testing.T) {
-	handler := NewServer(nil, newTestTokenManager(t), nil, &stubCampaignService{}, &stubApplicationService{}, &stubUserService{}, nil, nil, slog.New(slog.DiscardHandler)).Routes()
+	handler := NewServer(nil, newTestTokenManager(t), nil, &stubCampaignService{}, &stubApplicationService{}, &stubUserService{}, &stubAuditService{}, nil, nil, slog.New(slog.DiscardHandler)).Routes()
 
 	for _, p := range []struct{ method, path string }{
 		{http.MethodPost, "/api/v1/auth/login"},

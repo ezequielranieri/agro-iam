@@ -138,7 +138,7 @@ func run(log *slog.Logger) error {
 
 	srv := &http.Server{
 		Addr:         cfg.httpAddr,
-		Handler:      apphttp.NewServer(authService, tokenManager, lotService, campaignService, applicationService, userService, rateLimiter, signals, log).Routes(),
+		Handler:      apphttp.NewServer(authService, tokenManager, lotService, campaignService, applicationService, userService, auditService, rateLimiter, signals, log).Routes(),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 15 * time.Second,
 	}
