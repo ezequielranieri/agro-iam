@@ -681,6 +681,9 @@ func TestApplicationOperatorNameResolvedByRLS(t *testing.T) {
 	}
 	withSameTenant := makeApp(operatorA.ID)
 	withForeign := makeApp(operatorB.ID)
+	// A NULL operator_id resolves to "" (COALESCE default); create it before
+	// List so it is present in the returned set.
+	noOperator := makeApp("")
 
 	apps, err := applicationRepo.List(ctx, tenantA.ID)
 	if err != nil {
@@ -700,7 +703,6 @@ func TestApplicationOperatorNameResolvedByRLS(t *testing.T) {
 	}
 
 	// A NULL operator_id resolves to "" (COALESCE default).
-	noOperator := makeApp("")
 	if got := byID[noOperator.ID].OperatorName; got != "" {
 		t.Fatalf("NULL operator_name = %q, want \"\"", got)
 	}
