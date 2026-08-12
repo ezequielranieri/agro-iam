@@ -165,22 +165,26 @@ func assertDemoState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, phas
 
 		err := withTenant(ctx, pool, ids[i], func(tx pgx.Tx) error {
 			var users, lots, campaigns, apps, nullOps, admins int
-			if err := tx.QueryRow(ctx, `SELECT count(*) FROM app.users`).Scan(&users); err != nil {
+			// Assertions filter by tenant_id explicitly: CI's postgres role is
+			// the superuser, which bypasses FORCE RLS, so RLS-scoped counts
+			// would double under it. The withTenant wrapper is kept so the
+			// queries also behave for a role that does bind RLS.
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM app.users WHERE tenant_id = $1`, ids[i]).Scan(&users); err != nil {
 				return err
 			}
-			if err := tx.QueryRow(ctx, `SELECT count(*) FROM app.lots`).Scan(&lots); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM app.lots WHERE tenant_id = $1`, ids[i]).Scan(&lots); err != nil {
 				return err
 			}
-			if err := tx.QueryRow(ctx, `SELECT count(*) FROM app.campaigns`).Scan(&campaigns); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM app.campaigns WHERE tenant_id = $1`, ids[i]).Scan(&campaigns); err != nil {
 				return err
 			}
-			if err := tx.QueryRow(ctx, `SELECT count(*) FROM app.applications`).Scan(&apps); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM app.applications WHERE tenant_id = $1`, ids[i]).Scan(&apps); err != nil {
 				return err
 			}
-			if err := tx.QueryRow(ctx, `SELECT count(*) FROM app.applications WHERE operator_id IS NULL`).Scan(&nullOps); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM app.applications WHERE tenant_id = $1 AND operator_id IS NULL`, ids[i]).Scan(&nullOps); err != nil {
 				return err
 			}
-			if err := tx.QueryRow(ctx, `SELECT count(*) FROM app.users WHERE email = $1`, tenant.users[0].email).Scan(&admins); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM app.users WHERE tenant_id = $1 AND email = $2`, ids[i], tenant.users[0].email).Scan(&admins); err != nil {
 				return err
 			}
 
