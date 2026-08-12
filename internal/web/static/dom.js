@@ -17,16 +17,27 @@ export function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => ESC[ch]);
 }
 
-// el creates an element from a tag, attributes and children. Text children are
-// escaped with esc(); an existing element child is appended as-is (esc already
-// happened at its own insertion point). Event handlers are bound with addEventListener
-// for attributes named on* whose value is a function.
+// el creates an element from a tag, attributes and children. SVG tags are
+// created in the SVG namespace so the hand-rolled charts (D1) actually
+// render — document.createElement would produce HTML-namespace elements that
+// the browser refuses to draw. Text children are escaped with esc(); an
+// existing element child is appended as-is (esc already happened at its own
+// insertion point). Event handlers are bound with addEventListener for
+// attributes named on* whose value is a function.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const SVG_TAGS = new Set(['svg', 'path', 'circle', 'rect', 'line', 'text', 'g']);
+
 export function el(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
+  const node = SVG_TAGS.has(tag)
+    ? document.createElementNS(SVG_NS, tag)
+    : document.createElement(tag);
   for (const [name, value] of Object.entries(attrs ?? {})) {
     if (value === null || value === undefined) continue;
     if (name === 'class') {
-      node.className = value;
+      // setAttribute works for HTML and SVG alike (SVGElement.className is
+      // an SVGAnimatedString in some engines, so a direct assignment would
+      // silently fail there).
+      node.setAttribute('class', String(value));
     } else if (name.startsWith('on') && typeof value === 'function') {
       node.addEventListener(name.slice(2), value);
     } else {
