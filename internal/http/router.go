@@ -3,6 +3,8 @@
 package http
 
 import (
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/ezequielranieri/agro-iam/internal/http/handlers"
 	"github.com/ezequielranieri/agro-iam/internal/infrastructure/redis"
 	"github.com/ezequielranieri/agro-iam/internal/requestid"
+	"github.com/ezequielranieri/agro-iam/internal/web"
 )
 
 // Server bundles every dependency the HTTP layer needs.
@@ -51,6 +54,17 @@ func (s *Server) Routes() http.Handler {
 
 	// Healthz: no rate limit (exempt in middleware)
 	mux.HandleFunc("GET /healthz", handlers.Health)
+
+	// Demo SPA (FR1): GET / serves the embedded index.html and GET /static/
+	// serves the asset tree, both from the go:embed surface. Unknown /api/*
+	// paths are deliberately NOT caught here — a SPA fallback must never mask
+	// a missing API route (D1).
+	spa, err := fs.Sub(web.StaticFS(), "static")
+	if err != nil {
+		panic(fmt.Sprintf("web embed: %v", err))
+	}
+	mux.Handle("GET /{$}", http.FileServer(http.FS(spa)))
+	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(spa))))
 
 	tenantsHandler := handlers.NewTenantsHandler(s.tenants, s.log)
 
