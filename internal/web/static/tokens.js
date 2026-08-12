@@ -1,7 +1,7 @@
 // tokens.js — the token lifecycle (FR5, D5) as pure logic, so node --test can
 // cover it and the browser can import it. Storage is injected through the
-// createTokenStore adapter: this module NEVER touches localStorage or the DOM,
-// which is what makes the "access token lives in memory only" guarantee
+// createTokenStore adapter: this module NEVER touches browser storage or the
+// DOM, which is what makes the "access token lives in memory only" guarantee
 // checkable (web_test.go asserts this file stays pure).
 //
 // Contract:
@@ -39,8 +39,8 @@ export function roleFromToken(token) {
 }
 
 // createTokenStore builds the token holder over an injected storage adapter
-// ({getItem, setItem, removeItem} — e.g. window.localStorage). The access
-// token lives in the closure; the refresh token goes to storage.
+// (the {getItem, setItem, removeItem} trio of a browser storage area). The
+// access token lives in the closure; the refresh token goes to storage.
 export function createTokenStore(storage) {
   let accessToken = null;
   return {
