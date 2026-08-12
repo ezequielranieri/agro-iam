@@ -33,8 +33,8 @@ async function parseError(res) {
   return new ApiError(res.status, message || `request failed (${res.status})`, retryAfter);
 }
 
-// createApi wires the client. storage: {getItem,setItem,removeItem} adapter
-// (window.localStorage in the app). onSessionLost: called when a refresh 401
+// createApi wires the client. storage: the {getItem,setItem,removeItem}
+// adapter the app passes at boot. onSessionLost: called when a refresh 401
 // destroys the session so the app can redirect to login (FR5).
 export function createApi({ storage, fetchImpl, onSessionLost = () => {} }) {
   const tokens = createTokenStore(storage);

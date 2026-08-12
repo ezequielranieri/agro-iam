@@ -23,7 +23,7 @@ export function esc(value) {
 // for attributes named on* whose value is a function.
 export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
-  for (const [name, value] of Object.entries(attrs)) {
+  for (const [name, value] of Object.entries(attrs ?? {})) {
     if (value === null || value === undefined) continue;
     if (name === 'class') {
       node.className = value;
