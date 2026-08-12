@@ -42,7 +42,10 @@ jobs:
 
       # TEST_DATABASE_URL is set, so the RLS integration tests run for real
       # against the service container; unit tests run as always.
+      # -p 1 serializes package test binaries: both internal/infrastructure/
+      # postgres and cmd/seed own the same `app` schema (DROP + migrate in
+      # their TestMain), so parallel packages would clobber each other.
       - name: Test (unit + RLS integration)
         env:
           TEST_DATABASE_URL: postgres://agroiam:agroiam@localhost:5432/agroiam_test?sslmode=disable
-        run: go test ./...
+        run: go test -p 1 ./...

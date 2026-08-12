@@ -1,6 +1,9 @@
-// Command seed inserts demo data for local development: two tenants with an
-// admin user each and a couple of lots per tenant. Passwords are hashed with
-// the project's real Argon2id hasher, so login against the API works as-is.
+// Command seed inserts demo data for local development: two tenants, each with
+// one user per role (admin, agronomist, producer, auditor, hauler — password
+// test123), a couple of lots, two season campaigns and ten season-spread
+// applications with mixed operator assignment. Every helper is ensure-exists,
+// so reseeding is idempotent and stable. Passwords are hashed with the
+// project's real Argon2id hasher, so login against the API works as-is.
 //
 // Usage: DATABASE_URL=postgres://agroiam:agroiam@localhost:5432/agroiam?sslmode=disable go run ./cmd/seed
 //
@@ -9,6 +12,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -89,6 +93,7 @@ func run() error {
 			return fmt.Errorf("tenant %q: %w", t.name, err)
 		}
 
+		userIDs := make(map[string]string, len(t.users))
 		for _, u := range t.users {
 			hash, err := hasher.Hash(u.pass)
 			if err != nil {
@@ -99,6 +104,7 @@ func run() error {
 			if err != nil {
 				return fmt.Errorf("user %q: %w", u.email, err)
 			}
+			userIDs[u.email] = userID
 
 			if err := assignRole(ctx, pool, tenantID, userID, u.role); err != nil {
 				return fmt.Errorf("role %q: %w", u.role, err)
@@ -107,9 +113,39 @@ func run() error {
 			fmt.Printf("tenant=%s user=%s password=%s role=%s\n", t.name, u.email, u.pass, u.role)
 		}
 
+		lotIDs := make(map[string]string, len(t.lots))
 		for _, name := range t.lots {
-			if err := createLot(ctx, pool, tenantID, name); err != nil {
+			lotID, err := createLot(ctx, pool, tenantID, name)
+			if err != nil {
 				return fmt.Errorf("lot %q: %w", name, err)
+			}
+			lotIDs[name] = lotID
+		}
+
+		campaignIDs := make(map[string]string, len(t.campaigns))
+		for _, c := range t.campaigns {
+			start, err := time.Parse("2006-01-02", c.start)
+			if err != nil {
+				return fmt.Errorf("campaign %q start %q: %w", c.name, c.start, err)
+			}
+			end, err := time.Parse("2006-01-02", c.end)
+			if err != nil {
+				return fmt.Errorf("campaign %q end %q: %w", c.name, c.end, err)
+			}
+			campaignID, err := createCampaign(ctx, pool, tenantID, c.name, c.season, start, end)
+			if err != nil {
+				return fmt.Errorf("campaign %q: %w", c.name, err)
+			}
+			campaignIDs[c.name] = campaignID
+		}
+
+		for _, a := range t.applications {
+			applied, err := time.Parse(time.RFC3339, a.appliedAt)
+			if err != nil {
+				return fmt.Errorf("application %q on %q: bad applied_at %q: %w", a.product, a.lotName, a.appliedAt, err)
+			}
+			if err := createApplication(ctx, pool, tenantID, lotIDs[a.lotName], campaignIDs[a.campaignName], a.product, a.dose, applied, userIDs[a.operatorEmail], a.notes); err != nil {
+				return fmt.Errorf("application %q on %q: %w", a.product, a.lotName, err)
 			}
 		}
 
@@ -181,22 +217,41 @@ func demoPlan() []demoTenant {
 	}
 }
 
-// The tenant registry is not RLS-protected, so it is created with a plain
-// INSERT on the pool.
+// The tenant registry is not RLS-protected, so the lookup and the INSERT run
+// with plain pool queries. On reseed the existing row (and its id) is kept —
+// that is what keeps the realm registry stable (SD1).
 func createTenant(ctx context.Context, pool *pgxpool.Pool, name string) (string, error) {
 	var id string
 	err := pool.QueryRow(ctx,
+		`SELECT id FROM app.tenants WHERE name = $1`, name).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+	err = pool.QueryRow(ctx,
 		`INSERT INTO app.tenants (name) VALUES ($1) RETURNING id`, name).Scan(&id)
 	return id, err
 }
 
-// createUser runs inside WithTenant so the FORCED RLS on app.users accepts the
-// INSERT (the GUC must be bound to this tenant). We replicate the project's
-// tenant-scoped transaction pattern here because cmd/seed is a dev tool, not an
-// API endpoint.
+// createUser returns the id of the user with the given email (globally unique),
+// creating it when absent. It runs inside withTenant so the FORCED RLS on
+// app.users accepts both the lookup and the INSERT (the GUC must be bound to
+// this tenant); the project's tenant-scoped transaction pattern is replicated
+// here because cmd/seed is a dev tool, not an API endpoint. On reseed the
+// existing row is kept, so credentials never churn.
 func createUser(ctx context.Context, pool *pgxpool.Pool, tenantID, email, hash, fullName string) (string, error) {
 	var id string
 	err := withTenant(ctx, pool, tenantID, func(t pgx.Tx) error {
+		err := t.QueryRow(ctx,
+			`SELECT id FROM app.users WHERE email = $1`, email).Scan(&id)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
 		return t.QueryRow(ctx,
 			`INSERT INTO app.users (tenant_id, email, password_hash, full_name)
 			 VALUES ($1, $2, $3, $4) RETURNING id`,
@@ -208,17 +263,84 @@ func createUser(ctx context.Context, pool *pgxpool.Pool, tenantID, email, hash, 
 func assignRole(ctx context.Context, pool *pgxpool.Pool, tenantID, userID, role string) error {
 	return withTenant(ctx, pool, tenantID, func(t pgx.Tx) error {
 		_, err := t.Exec(ctx,
-			`INSERT INTO app.user_roles (user_id, role_code, tenant_id) VALUES ($1, $2, $3)`,
+			`INSERT INTO app.user_roles (user_id, role_code, tenant_id) VALUES ($1, $2, $3)
+			 ON CONFLICT (user_id, role_code) DO NOTHING`,
 			userID, role, tenantID)
 		return err
 	})
 }
 
-func createLot(ctx context.Context, pool *pgxpool.Pool, tenantID, name string) error {
+// createLot returns the id of the lot with the given name inside the tenant,
+// creating it when absent (idempotent reseeds never duplicate lots).
+func createLot(ctx context.Context, pool *pgxpool.Pool, tenantID, name string) (string, error) {
+	var id string
+	err := withTenant(ctx, pool, tenantID, func(t pgx.Tx) error {
+		err := t.QueryRow(ctx,
+			`SELECT id FROM app.lots WHERE tenant_id = $1 AND name = $2`,
+			tenantID, name).Scan(&id)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		return t.QueryRow(ctx,
+			`INSERT INTO app.lots (tenant_id, name, area_ha, crop) VALUES ($1, $2, $3, $4) RETURNING id`,
+			tenantID, name, 120.5, name).Scan(&id)
+	})
+	return id, err
+}
+
+// createCampaign returns the id of the campaign with the given name inside the
+// tenant, creating it when absent (SD1: 2-3 season campaigns per tenant).
+func createCampaign(ctx context.Context, pool *pgxpool.Pool, tenantID, name, season string, startedAt, endedAt time.Time) (string, error) {
+	var id string
+	err := withTenant(ctx, pool, tenantID, func(t pgx.Tx) error {
+		err := t.QueryRow(ctx,
+			`SELECT id FROM app.campaigns WHERE tenant_id = $1 AND name = $2`,
+			tenantID, name).Scan(&id)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		return t.QueryRow(ctx,
+			`INSERT INTO app.campaigns (tenant_id, name, season, started_at, ended_at)
+			 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+			tenantID, name, season, startedAt, endedAt).Scan(&id)
+	})
+	return id, err
+}
+
+// createApplication inserts one input application; operatorID "" becomes a NULL
+// operator_id (unattributed jobs are part of the demo dataset). A row that
+// already matches on (tenant, lot, campaign, product, applied_at, operator) is
+// skipped, so reseeding never duplicates applications.
+func createApplication(ctx context.Context, pool *pgxpool.Pool, tenantID, lotID, campaignID, product, dose string, appliedAt time.Time, operatorID, notes string) error {
 	return withTenant(ctx, pool, tenantID, func(t pgx.Tx) error {
-		_, err := t.Exec(ctx,
-			`INSERT INTO app.lots (tenant_id, name, area_ha, crop) VALUES ($1, $2, $3, $4)`,
-			tenantID, name, 120.5, name)
+		var op any
+		if operatorID != "" {
+			op = operatorID
+		}
+		var exists bool
+		err := t.QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM app.applications
+				WHERE tenant_id = $1 AND lot_id = $2 AND campaign_id = $3
+				  AND product_name = $4 AND applied_at = $5
+				  AND operator_id IS NOT DISTINCT FROM $6
+			 )`, tenantID, lotID, campaignID, product, appliedAt, op).Scan(&exists)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return nil
+		}
+		_, err = t.Exec(ctx,
+			`INSERT INTO app.applications (tenant_id, lot_id, campaign_id, product_name, dose, applied_at, operator_id, notes)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			tenantID, lotID, campaignID, product, dose, appliedAt, op, notes)
 		return err
 	})
 }
