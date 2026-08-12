@@ -110,4 +110,18 @@ func (s *auditService) VerifyChain(ctx context.Context, tenantID string) (int64,
 	return verifyChainEntries(entries)
 }
 
+// Latest returns the tenant's most recent entries, newest first (seq DESC).
+// limit bounds the result — the demo audit screen uses a latest-100 window
+// (AP1). RLS enforcement is the repository's concern: the query runs inside
+// WithTenant, so a tenant can never read another's trail.
+func (s *auditService) Latest(ctx context.Context, tenantID string, limit int) ([]*domain.AuditEntry, error) {
+	if tenantID == "" {
+		return nil, domain.ErrTenantRequired
+	}
+	if limit <= 0 {
+		return nil, domain.ErrInvalidInput
+	}
+	return s.repo.ListRecent(ctx, tenantID, limit)
+}
+
 var _ ports.AuditService = (*auditService)(nil)

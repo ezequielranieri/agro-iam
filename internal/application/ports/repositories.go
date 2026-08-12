@@ -94,4 +94,7 @@ type AuditRepository interface {
 	// ListByTenant returns every entry of the tenant ordered by seq ascending,
 	// used by chain verification.
 	ListByTenant(ctx context.Context, tenantID string) ([]*domain.AuditEntry, error)
+	// ListRecent returns the tenant's most recent entries, newest first
+	// (ORDER BY seq DESC LIMIT $1), scoped by the WithTenant RLS session (AP1).
+	ListRecent(ctx context.Context, tenantID string, limit int) ([]*domain.AuditEntry, error)
 }

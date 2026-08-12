@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,6 +81,24 @@ func (f *fakeAuditRepo) ListByTenant(ctx context.Context, tenantID string) ([]*d
 		if e.TenantID == tenantID {
 			out = append(out, e)
 		}
+	}
+	return out, nil
+}
+
+// ListRecent returns the tenant's entries newest first (seq DESC), capped at
+// limit — the AP1 read path the demo audit screen uses.
+func (f *fakeAuditRepo) ListRecent(ctx context.Context, tenantID string, limit int) ([]*domain.AuditEntry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []*domain.AuditEntry
+	for _, e := range f.entries {
+		if e.TenantID == tenantID {
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Seq > out[j].Seq })
+	if len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }
@@ -337,6 +356,69 @@ func TestAuditServiceVerifyChainEmptyTenant(t *testing.T) {
 	}
 	if broken != 0 {
 		t.Fatalf("empty chain broken seq = %d, want 0", broken)
+	}
+}
+
+// TestAuditServiceLatest proves Latest delegates to the repository with the
+// tenant scoping key and the limit, and returns the newest-first entries only
+// — another tenant's rows never surface (AP1).
+func TestAuditServiceLatest(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	repo := &fakeAuditRepo{entries: []*domain.AuditEntry{
+		{TenantID: "tenant-1", Action: "auth.login", EntityType: "user", Seq: 1, Severity: domain.SeverityInfo, CreatedAt: now},
+		{TenantID: "tenant-1", Action: "auth.refresh", EntityType: "refresh_token", Seq: 2, Severity: domain.SeverityInfo, CreatedAt: now},
+		{TenantID: "tenant-1", Action: "user.create", EntityType: "user", Seq: 3, Severity: domain.SeverityInfo, CreatedAt: now},
+		// Cross-tenant rows must never leak into tenant-1's result.
+		{TenantID: "tenant-2", Action: "auth.login", EntityType: "user", Seq: 1, Severity: domain.SeverityInfo, CreatedAt: now},
+	}}
+	svc := &auditService{repo: repo, log: discardLogger(), now: time.Now}
+
+	got, err := svc.Latest(context.Background(), "tenant-1", 2)
+	if err != nil {
+		t.Fatalf("Latest: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("Latest returned %d entries, want 2 (limit)", len(got))
+	}
+	if got[0].Seq != 3 || got[1].Seq != 2 {
+		t.Fatalf("Latest seqs = %d,%d want 3,2 (newest first)", got[0].Seq, got[1].Seq)
+	}
+	for _, e := range got {
+		if e.TenantID != "tenant-1" {
+			t.Fatalf("Latest leaked a cross-tenant entry: %+v", e)
+		}
+	}
+
+	// A limit larger than the tenant's trail returns everything it owns.
+	all, err := svc.Latest(context.Background(), "tenant-1", 100)
+	if err != nil {
+		t.Fatalf("Latest(100): %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("Latest(100) = %d entries, want 3 (tenant-1 owns exactly three)", len(all))
+	}
+}
+
+// TestAuditServiceLatestRequiresTenant proves Latest rejects an empty tenant
+// before any repository call.
+func TestAuditServiceLatestRequiresTenant(t *testing.T) {
+	repo := &fakeAuditRepo{}
+	svc := &auditService{repo: repo, log: discardLogger(), now: time.Now}
+
+	_, err := svc.Latest(context.Background(), "", 100)
+	if !errors.Is(err, domain.ErrTenantRequired) {
+		t.Fatalf("Latest empty tenant error = %v, want ErrTenantRequired", err)
+	}
+}
+
+// TestAuditServiceLatestInvalidLimit proves a non-positive limit is rejected
+// (the demo endpoint always passes 100; a 0 limit would be a caller bug).
+func TestAuditServiceLatestInvalidLimit(t *testing.T) {
+	svc := &auditService{repo: &fakeAuditRepo{}, log: discardLogger(), now: time.Now}
+
+	_, err := svc.Latest(context.Background(), "tenant-1", 0)
+	if !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("Latest zero limit error = %v, want ErrInvalidInput", err)
 	}
 }
 
