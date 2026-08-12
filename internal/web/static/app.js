@@ -6,11 +6,13 @@
 import { esc, el } from './dom.js';
 import { createApi } from './api.js';
 import { renderLogin } from './views/login.js';
+import { renderDashboard } from './views/dashboard.js';
 
 // The 7 routes (FR2). login is the unauthenticated surface; the rest render
-// inside the shell.
+// inside the shell. The dashboard is live (S4); the other data routes are
+// placeholders until S5.
 const NAV = [
-  { route: 'dashboard', label: 'Dashboard', roles: null, note: 'Aggregates and charts land in S4.' },
+  { route: 'dashboard', label: 'Dashboard', roles: null, note: 'KPI cards and charts.' },
   { route: 'lots', label: 'Lots', roles: null, note: 'The lots table lands in S5.' },
   { route: 'campaigns', label: 'Campaigns', roles: null, note: 'The campaigns table lands in S5.' },
   { route: 'applications', label: 'Applications', roles: null, note: 'The applications table lands in S5.' },
@@ -74,6 +76,11 @@ function route() {
   renderShell(name, role);
   titleEl.textContent = VIEW_TITLES[name];
   roleBadgeEl.textContent = role;
+  if (name === 'dashboard') {
+    // The dashboard is live (S4, FD1): it fetches the list endpoints itself.
+    renderDashboard(viewEl, { api });
+    return;
+  }
   renderView(el('div', { class: 'card empty ' + name }, item.note));
 }
 

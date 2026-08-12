@@ -47,6 +47,33 @@ func TestStaticFSSubTree(t *testing.T) {
 	}
 }
 
+// TestStaticFSDashboardAssets proves the FD1 dashboard wiring is embedded:
+// the chart math module and the dashboard view must ship in the binary, and
+// app.js must wire the dashboard route to renderDashboard — otherwise the
+// #/dashboard route keeps showing the placeholder card.
+func TestStaticFSDashboardAssets(t *testing.T) {
+	fsys := StaticFS()
+	for _, name := range []string{"static/charts.js", "static/views/dashboard.js"} {
+		b, err := fs.ReadFile(fsys, name)
+		if err != nil {
+			t.Fatalf("%s in embed FS: %v", name, err)
+		}
+		if len(b) == 0 {
+			t.Fatalf("%s is empty", name)
+		}
+	}
+
+	appJS, err := fs.ReadFile(fsys, "static/app.js")
+	if err != nil {
+		t.Fatalf("static/app.js in embed FS: %v", err)
+	}
+	for _, want := range []string{"views/dashboard.js", "renderDashboard("} {
+		if !strings.Contains(string(appJS), want) {
+			t.Errorf("app.js must wire the dashboard view (FD1): missing %q", want)
+		}
+	}
+}
+
 // TestNoAccessTokenPersistence enforces the FR5 storage contract statically:
 // the access token must live in memory only, so no asset may read or write
 // browser persistence, and the token modules must stay storage-agnostic
@@ -59,7 +86,9 @@ func TestNoAccessTokenPersistence(t *testing.T) {
 		"static/api.js",
 		"static/dom.js",
 		"static/tokens.js",
+		"static/charts.js",
 		"static/views/login.js",
+		"static/views/dashboard.js",
 	}
 	readAsset := func(t *testing.T, name string) string {
 		t.Helper()
@@ -71,8 +100,9 @@ func TestNoAccessTokenPersistence(t *testing.T) {
 	}
 
 	// Module-level prohibition: the token logic must not reference any
-	// browser persistence or DOM surface at all.
-	for _, name := range []string{"static/tokens.js", "static/api.js", "static/dom.js"} {
+	// browser persistence or DOM surface at all. The dashboard modules are
+	// pure math and a storage-agnostic view, so they belong in this list too.
+	for _, name := range []string{"static/tokens.js", "static/api.js", "static/dom.js", "static/charts.js"} {
 		src := readAsset(t, name)
 		for _, banned := range []string{"localStorage", "sessionStorage", "document.cookie", "cookieStore"} {
 			if strings.Contains(src, banned) {
