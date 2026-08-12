@@ -7,7 +7,26 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <div id="app">Agro IAM demo — loading…</div>
+  <!-- Authenticated shell (S3): dark sidebar + light canvas. #app and #auth
+       are toggled by app.js — exactly one is visible at any time. -->
+  <div id="app" class="shell hidden">
+    <aside class="sidebar">
+      <div class="brand">Agro IAM</div>
+      <nav id="nav" class="nav" aria-label="Primary"></nav>
+      <button id="logout" class="btn ghost sidebar-logout" type="button">Sign out</button>
+    </aside>
+    <main class="canvas">
+      <header class="topbar">
+        <div id="view-title" class="view-title"></div>
+        <span id="role-badge" class="badge"></span>
+      </header>
+      <section id="view" class="view" tabindex="-1"></section>
+    </main>
+  </div>
+
+  <!-- Unauthenticated surface: the login screen renders here (FR3). -->
+  <div id="auth" class="auth hidden"></div>
+
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

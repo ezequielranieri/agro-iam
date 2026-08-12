@@ -1,3 +1,234 @@
-/* Agro IAM demo placeholder stylesheet. The visual system (D2) lands in the
-   frontend slices (S3–S5). */
-body { font-family: system-ui, sans-serif; margin: 0; padding: 1rem; }
+/* Agro IAM demo — visual system (D2). System font stack (offline-safe);
+   design tokens in :root drive every color, radius and shadow. */
+
+:root {
+  --canvas: #FAFAFA;
+  --surface: #FFFFFF;
+  --primary: #2E7D32;
+  --primary-soft: #E8F5E9;
+  --danger: #C62828;
+  --danger-soft: #FDECEA;
+  --text: #1B2A1E;
+  --text-muted: #5F6B62;
+  --sidebar: #0D2818;
+  --sidebar-text: #E6F0E8;
+  --sidebar-muted: #9FBFAA;
+  --line: #E3E8E4;
+  --radius-lg: 20px;
+  --radius-md: 16px;
+  --radius-sm: 10px;
+  --shadow-card: 0 1px 2px rgba(13, 40, 24, 0.06), 0 4px 16px rgba(13, 40, 24, 0.06);
+  --shadow-raised: 0 8px 28px rgba(13, 40, 24, 0.18);
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--canvas);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.hidden { display: none !important; }
+
+/* ---- Shell layout (sidebar + canvas) ---- */
+
+.shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  background: var(--sidebar);
+  color: var(--sidebar-text);
+  padding: 24px 16px;
+}
+
+.brand {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0 8px;
+}
+
+.nav { display: flex; flex-direction: column; gap: 4px; }
+
+.nav a {
+  color: var(--sidebar-muted);
+  text-decoration: none;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+}
+
+.nav a:hover { color: var(--sidebar-text); background: rgba(255, 255, 255, 0.06); }
+
+.nav a.active {
+  color: #FFFFFF;
+  background: var(--primary);
+}
+
+.sidebar-logout { margin-top: auto; }
+
+.canvas {
+  padding: 24px 32px 48px;
+  max-width: 1180px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.view-title { font-size: 22px; font-weight: 700; }
+
+.view:focus { outline: none; }
+
+/* ---- Auth surface ---- */
+
+.auth {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-card { width: 100%; max-width: 400px; }
+
+.login-brand {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-bottom: 4px;
+  text-align: center;
+}
+
+.login-sub { text-align: center; color: var(--text-muted); margin: 0 0 20px; }
+
+/* ---- Cards & fields ---- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 24px;
+}
+
+.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+
+.field label { font-weight: 600; font-size: 13px; }
+
+.field input,
+.field select {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font: inherit;
+  background: var(--surface);
+}
+
+.field input:focus,
+.field select:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  border-color: var(--primary);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 10px 16px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.btn.primary { background: var(--primary); color: #FFFFFF; }
+
+.btn.ghost { background: transparent; color: var(--sidebar-muted); border-color: rgba(255, 255, 255, 0.22); }
+
+.btn.danger { background: var(--danger-soft); color: var(--danger); }
+
+.btn-block { width: 100%; }
+
+/* ---- Banners ---- */
+
+.banner {
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  font-weight: 500;
+  margin-bottom: 16px;
+}
+
+.banner.error { background: var(--danger-soft); color: var(--danger); }
+
+/* ---- Data tables (S3 foundation, S4/S5 fill) ---- */
+
+.table { width: 100%; border-collapse: collapse; background: var(--surface); }
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.table th { color: var(--text-muted); font-size: 13px; font-weight: 600; }
+
+.badge {
+  display: inline-block;
+  background: var(--primary-soft);
+  color: var(--primary);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+/* ---- Dashboard primitives (D2; consumed by S4) ---- */
+
+.kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
+
+.kpi-card { border-radius: var(--radius-md); }
+
+.kpi-value { font-size: 28px; font-weight: 700; }
+
+.kpi-label { color: var(--text-muted); font-size: 13px; }
+
+.empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 40px 16px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.skeleton {
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, #EDF1EE 25%, #F7F9F8 50%, #EDF1EE 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.2s infinite;
+}
+
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+.modal { position: fixed; inset: 0; background: rgba(13, 40, 24, 0.45); display: grid; place-items: center; z-index: 50; }
