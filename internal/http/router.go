@@ -24,6 +24,7 @@ type Server struct {
 	campaigns    ports.CampaignService
 	applications ports.ApplicationService
 	users        ports.UserService
+	audit        ports.AuditService
 	rateLimiter  *redis.RateLimiter
 	signals      ports.BreachSignalSink
 	log          *slog.Logger
@@ -32,8 +33,8 @@ type Server struct {
 // NewServer builds the server with its dependencies.
 // rateLimiter may be nil (rate limiting disabled); signals may be nil (breach
 // emission is a no-op).
-func NewServer(auth ports.AuthService, tokens ports.TokenManager, lots ports.LotService, campaigns ports.CampaignService, applications ports.ApplicationService, users ports.UserService, rateLimiter *redis.RateLimiter, signals ports.BreachSignalSink, log *slog.Logger) *Server {
-	return &Server{auth: auth, tokens: tokens, lots: lots, campaigns: campaigns, applications: applications, users: users, rateLimiter: rateLimiter, signals: signals, log: log}
+func NewServer(auth ports.AuthService, tokens ports.TokenManager, lots ports.LotService, campaigns ports.CampaignService, applications ports.ApplicationService, users ports.UserService, audit ports.AuditService, rateLimiter *redis.RateLimiter, signals ports.BreachSignalSink, log *slog.Logger) *Server {
+	return &Server{auth: auth, tokens: tokens, lots: lots, campaigns: campaigns, applications: applications, users: users, audit: audit, rateLimiter: rateLimiter, signals: signals, log: log}
 }
 
 // Routes assembles the stdlib ServeMux. Path parameters use the Go 1.22
@@ -106,6 +107,14 @@ func (s *Server) Routes() http.Handler {
 		s.requireAuth(s.requireRole(domain.RoleAdmin)(s.rateLimit(120, time.Minute)(http.HandlerFunc(usersHandler.List)))))
 	mux.Handle("PATCH /api/v1/users/{id}",
 		s.requireAuth(s.requireRole(domain.RoleAdmin)(s.rateLimit(120, time.Minute)(http.HandlerFunc(usersHandler.Update)))))
+
+	auditHandler := handlers.NewAuditHandler(s.audit, s.log)
+
+	// Audit trail read: admin only (AP1). Composition is auth -> role -> rate
+	// limit, matching every other role-gated route (D6), so a forbidden role
+	// never burns rate-limit quota.
+	mux.Handle("GET /api/v1/audit",
+		s.requireAuth(s.requireRole(domain.RoleAdmin)(s.rateLimit(120, time.Minute)(http.HandlerFunc(auditHandler.Latest)))))
 
 	return s.chain(mux)
 }
