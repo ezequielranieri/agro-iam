@@ -117,6 +117,38 @@ func TestStaticFSS5Assets(t *testing.T) {
 	}
 }
 
+// TestLoginLeavesAuthSurface proves the FR3/FR4 surface contract statically:
+// the router's NORMAL dispatch (a live route) must call showShell() before it
+// renders the view. Regression: a successful login rendered the dashboard and
+// fetched data, but the login screen stayed visible because route() populated
+// the nav and dispatched the renderer without ever showing the shell — only
+// the fallback and permission paths did. Assert showShell() sits in route()
+// before the RENDERERS dispatch, so a login actually leaves the login screen.
+func TestLoginLeavesAuthSurface(t *testing.T) {
+	appJS, err := fs.ReadFile(StaticFS(), "static/app.js")
+	if err != nil {
+		t.Fatalf("static/app.js in embed FS: %v", err)
+	}
+	src := string(appJS)
+
+	showCall := "showShell();"
+	if !strings.Contains(src, showCall) {
+		t.Fatalf("app.js must call %s somewhere (surface toggling)", showCall)
+	}
+
+	// The normal dispatch must reach showShell() BEFORE dispatching the
+	// RENDERERS map. If the only showShell() calls live in the fallback and
+	// permission helpers, the live-route path leaves the auth surface up.
+	dispatchIdx := strings.Index(src, "const render = RENDERERS[name];")
+	if dispatchIdx == -1 {
+		t.Fatalf("app.js must have the RENDERERS dispatch in route()")
+	}
+	beforeDispatch := src[:dispatchIdx]
+	if !strings.Contains(beforeDispatch, showCall) {
+		t.Errorf("route() must call showShell() before the RENDERERS dispatch; got it only after (login would leave the login screen visible)")
+	}
+}
+
 // TestNoAccessTokenPersistence enforces the FR5 storage contract statically:
 // the access token must live in memory only, so no asset may read or write
 // browser persistence, and the token modules must stay storage-agnostic

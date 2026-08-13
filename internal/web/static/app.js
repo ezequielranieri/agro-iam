@@ -90,6 +90,11 @@ function route() {
     renderPermission(item);
     return;
   }
+  // The shell owns the page for every live route: hide the auth surface
+  // BEFORE rendering so a successful login actually leaves the login screen
+  // (FR3/FR4). The fallback/permission paths already show the shell; the
+  // normal dispatch must too.
+  showShell();
   renderShell(name, role);
   titleEl.textContent = VIEW_TITLES[name];
   roleBadgeEl.textContent = role;
