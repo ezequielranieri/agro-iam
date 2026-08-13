@@ -10,6 +10,7 @@ import { renderDashboard } from './views/dashboard.js';
 import { renderLots } from './views/lots.js';
 import { renderCampaigns } from './views/campaigns.js';
 import { renderApplications } from './views/applications.js';
+import { renderUsers } from './views/users.js';
 
 // The 7 routes (FR2). login is the unauthenticated surface; the rest render
 // inside the shell. The dashboard is live (S4); the lots catalog is live now
@@ -33,6 +34,7 @@ const RENDERERS = {
   lots: renderLots,
   campaigns: renderCampaigns,
   applications: renderApplications,
+  users: renderUsers,
 };
 
 let api;
