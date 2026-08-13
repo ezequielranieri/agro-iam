@@ -27,3 +27,6 @@ coverage.out
 # Editor
 .idea/
 .vscode/
+
+# Local agent cache
+.atl/

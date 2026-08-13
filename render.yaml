@@ -1,0 +1,39 @@
+# Render Blueprint for the agro-iam demo platform.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Deploy:
+#   1. Push this file (and the Dockerfile/entrypoint) to the repo.
+#   2. Render dashboard -> New -> Blueprint -> connect this repo.
+#   3. Set JWT_SECRET on the web service (a real secret, never "change-me").
+#   4. Render provisions Postgres, runs preDeployCommand, and starts the app.
+#
+# Notes:
+#   - Redis is intentionally omitted: the API is fail-open and falls back to
+#     its in-process rate limiter when REDIS_ADDR is unset (see cmd/api).
+#   - preDeployCommand runs migrations + the idempotent demo seed (2 tenants x
+#     5 roles, password test123 — same dataset as `make demo`).
+#   - The free Postgres instance expires after 30 days; upgrade it or re-seed
+#     a fresh one to keep the demo alive.
+services:
+  - type: web
+    name: agro-iam
+    runtime: docker
+    plan: free
+    rootDir: .
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    preDeployCommand: /usr/local/bin/migrate -path=/migrations -database "$DATABASE_URL" up && /usr/local/bin/agro-iam-seed
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agro-iam-db
+          property: connectionString
+      - key: JWT_SECRET
+        sync: false
+    autoDeploy: true
+
+databases:
+  - name: agro-iam-db
+    databaseName: agroiam
+    user: agroiam
+    plan: free
