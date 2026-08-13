@@ -28,6 +28,17 @@ export function requiredField(value) {
   return typeof value === 'string' && value.trim() !== '';
 }
 
+// validateCampaign checks the FS2 create-campaign form: name and season are
+// required. The dates are optional (a campaign may not have started, or may
+// still be running), so they are never part of validation.
+export function validateCampaign(input = {}) {
+  const value = input || {};
+  const missing = [];
+  if (!requiredField(value.name)) missing.push('name');
+  if (!requiredField(value.season)) missing.push('season');
+  return { valid: missing.length === 0, missing };
+}
+
 // validateApplication checks the R6 required fields — lot_id, campaign_id and
 // product_name — and returns {valid, missing}. The missing list drives inline
 // hints on the form so the client never ships a payload the service would

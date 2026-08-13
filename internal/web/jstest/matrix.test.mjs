@@ -5,6 +5,7 @@ import {
   canWrite,
   requiredField,
   validateApplication,
+  validateCampaign,
   validateUser,
   WRITE_ROLES,
 } from '../static/matrix.js';
@@ -55,6 +56,32 @@ test('requiredField accepts non-blank strings and rejects blank/absent values', 
   assert.equal(requiredField(null), false);
   assert.equal(requiredField(undefined), false);
   assert.equal(requiredField(42), false);
+});
+
+// ---- validateCampaign (FS2) ------------------------------------------------
+
+test('validateCampaign passes a complete campaign payload (FS2)', () => {
+  const result = validateCampaign({ name: 'Campaña 2025/2026', season: '2025/2026' });
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.missing, []);
+});
+
+test('validateCampaign flags missing name and season (FS2)', () => {
+  const result = validateCampaign({});
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.missing, ['name', 'season']);
+});
+
+test('validateCampaign rejects whitespace-only values and absent input', () => {
+  const blank = validateCampaign({ name: '   ', season: '' });
+  assert.equal(blank.valid, false);
+  assert.deepEqual(blank.missing, ['name', 'season']);
+
+  for (const input of [null, undefined]) {
+    const result = validateCampaign(input);
+    assert.equal(result.valid, false);
+    assert.deepEqual(result.missing, ['name', 'season']);
+  }
 });
 
 // ---- validateApplication (R6) ---------------------------------------------
