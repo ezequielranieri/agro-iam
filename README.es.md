@@ -133,8 +133,8 @@ curl -X POST http://localhost:8080/api/v1/auth/login \
   -d '{"email":"producer@coop-a.example","password":"s3cret","tenant_id":"<uuid>"}'
 ```
 
-Otros objetivos: `make down` (detener), `make build`, `make test`, `make vet`,
-`make migrate-up`.
+Otros objetivos: `make down` (detener), `make demo` (up + seed + run, de una),
+`make build`, `make test`, `make vet`, `make migrate-up`.
 
 ### Nota sobre el contrato de login
 
@@ -144,6 +144,20 @@ ni se puede descubrir el tenant *a partir* del usuario sin romper el aislamiento
 identificador de tenant forma parte del intercambio de credenciales (el mismo patrón de realm
 que usan Auth0/Cognito). El 401 devuelto ante cualquier fallo es indistinguible tanto si lo
 incorrecto fue el email, la contraseña o el tenant.
+
+### Credenciales de demo (slice 5)
+
+`make demo` (o `go run ./cmd/seed`) siembra dos tenants, cada uno con un usuario por
+rol. Todas las cuentas comparten la contraseña `test123`:
+
+| Tenant | Admin | Agrónomo | Productor | Auditor | Transportista |
+|---|---|---|---|---|---|
+| Coop La Esperanza | `admin@esperanza.coop` | `agronomo@esperanza.coop` | `productor@esperanza.coop` | `auditor@esperanza.coop` | `transportista@esperanza.coop` |
+| Estancia El Algarrobo | `admin@algarrobo.campo` | `agronomo@algarrobo.campo` | `productor@algarrobo.campo` | `auditor@algarrobo.campo` | `transportista@algarrobo.campo` |
+
+Contraseña: `test123` para todas las cuentas. La pantalla de login de la SPA lista
+ambos realms (nombres de tenant) en el momento de la solicitud — sin ids hardcodeados
+(AP2).
 
 ## Pruebas
 
@@ -224,7 +238,7 @@ integración de RLS se ejecutan de verdad en CI — sin archivo `docker-compose`
 - [x] Slice 3 — emisión de eventos de auditoría con encadenamiento por hash, limitación de tasa respaldada por Redis, detección de brechas / alertas de compromiso de tokens
 - [x] M30 — port de salida de señales de brecha (`ports.BreachSignalSink`) para que las señales con severidad puedan llegar a consumidores futuros
 - [x] Slice 4 — CRUD de campañas y aplicaciones sobre los repos RLS (cada consulta dentro de `WithTenant`), aprovisionamiento de usuarios (UserService + UserRoleRepository), aplicación de RBAC (claim del rol más privilegiado al emitir el token, middleware `RequireRole`, matriz de rutas protegidas)
-- [ ] Slice 5 — frontend de demostración / demo desplegada
+- [x] Slice 5 — frontend de demostración / demo desplegada
 
 ## Licencia
 

@@ -237,7 +237,7 @@ execute for real in CI — no `docker-compose` file involved.
 - [x] Slice 3 — audit event emission with hash-chaining, Redis-backed rate limiting, breach detection / token-compromise alerting
 - [x] M30 — outbound breach-signal sink port (`ports.BreachSignalSink`) so severitized signals can reach future consumers
 - [x] Slice 4 — campaigns & applications CRUD over the RLS repos (every query inside `WithTenant`), user provisioning (UserService + UserRoleRepository), RBAC enforcement (most-privileged role claim at token issue, `RequireRole` middleware, guarded route matrix)
-- [ ] Slice 5 — demo frontend / deployed demo
+- [x] Slice 5 — demo frontend / deployed demo
 
 ## License
 
