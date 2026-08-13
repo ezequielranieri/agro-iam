@@ -1,0 +1,7 @@
+.git
+bin
+.env
+.env.*
+openspec
+node_modules
+.atl
