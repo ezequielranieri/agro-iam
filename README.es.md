@@ -147,6 +147,9 @@ incorrecto fue el email, la contraseña o el tenant.
 
 ### Credenciales de demo (slice 5)
 
+**Demo en vivo:** https://agro-iam.onrender.com (tier gratuito — se duerme tras
+~15 min de inactividad; la primera petición tras el reposo tarda ~30-60 s en despertarlo).
+
 `make demo` (o `go run ./cmd/seed`) siembra dos tenants, cada uno con un usuario por
 rol. Todas las cuentas comparten la contraseña `test123`:
 

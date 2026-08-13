@@ -148,6 +148,9 @@ indistinguishable whether the email, password or tenant was wrong.
 
 ### Demo credentials (slice 5)
 
+**Live demo:** https://agro-iam.onrender.com (free tier — spins down after ~15 min
+of inactivity; the first request after idle takes ~30-60s to wake it up).
+
 `make demo` (or `go run ./cmd/seed`) seeds two tenants, each with one user per
 role. Every account shares the password `test123`:
 
