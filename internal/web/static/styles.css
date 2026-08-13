@@ -203,6 +203,33 @@ body {
   text-transform: capitalize;
 }
 
+/* ---- Lots catalog (S5 polish): search toolbar, card wrapper, sort, badges ---- */
+
+.table-toolbar { display: flex; justify-content: space-between; margin-bottom: 16px; }
+
+.table-toolbar .field { margin-bottom: 0; }
+
+.table-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.table tbody tr:hover { background: #F4F8F4; }
+
+.sortable { cursor: pointer; user-select: none; }
+
+.sortable:hover,
+.sortable.active { color: var(--text); }
+
+.sort-indicator { margin-left: 4px; font-size: 10px; }
+
+.badge.crop-trigo { background: #EFEBE9; color: #8D6E63; }
+
+.badge.crop-cebada { background: #FFF3E0; color: #FF8F00; }
+
 /* ---- Dashboard primitives (D2; consumed by S4) ---- */
 
 .kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
