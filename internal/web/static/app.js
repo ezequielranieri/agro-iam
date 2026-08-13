@@ -8,6 +8,8 @@ import { createApi } from './api.js';
 import { renderLogin } from './views/login.js';
 import { renderDashboard } from './views/dashboard.js';
 import { renderLots } from './views/lots.js';
+import { renderCampaigns } from './views/campaigns.js';
+import { renderApplications } from './views/applications.js';
 
 // The 7 routes (FR2). login is the unauthenticated surface; the rest render
 // inside the shell. The dashboard is live (S4); the lots catalog is live now
@@ -29,6 +31,8 @@ const VIEW_TITLES = Object.fromEntries(NAV.map((item) => [item.route, item.label
 const RENDERERS = {
   dashboard: renderDashboard,
   lots: renderLots,
+  campaigns: renderCampaigns,
+  applications: renderApplications,
 };
 
 let api;
