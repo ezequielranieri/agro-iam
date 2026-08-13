@@ -327,3 +327,11 @@ body {
 .btn-sm { padding: 8px 12px; font-size: 13px; }
 
 .table-wrap { overflow-x: auto; }
+
+/* Audit severity badges (FA2): color-coded by severity, D2-adjacent. */
+
+.badge.severity-info { background: var(--primary-soft); color: var(--primary); }
+
+.badge.severity-warn { background: #FFF3E0; color: #E65100; }
+
+.badge.severity-critical { background: var(--danger-soft); color: var(--danger); }

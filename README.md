@@ -134,8 +134,8 @@ curl -X POST http://localhost:8080/api/v1/auth/login \
   -d '{"email":"producer@coop-a.example","password":"s3cret","tenant_id":"<uuid>"}'
 ```
 
-Other targets: `make down` (stop), `make build`, `make test`, `make vet`,
-`make migrate-up`.
+Other targets: `make down` (stop), `make demo` (up + seed + run, one shot),
+`make build`, `make test`, `make vet`, `make migrate-up`.
 
 ### A note on the login contract
 
@@ -145,6 +145,19 @@ tenant, and the tenant cannot be discovered *from* the user without breaking
 isolation — so the tenant identifier is part of the credential exchange (the
 same realm pattern Auth0/Cognito use). The 401 returned on any failure is
 indistinguishable whether the email, password or tenant was wrong.
+
+### Demo credentials (slice 5)
+
+`make demo` (or `go run ./cmd/seed`) seeds two tenants, each with one user per
+role. Every account shares the password `test123`:
+
+| Tenant | Admin | Agronomist | Producer | Auditor | Hauler |
+|---|---|---|---|---|---|
+| Coop La Esperanza | `admin@esperanza.coop` | `agronomo@esperanza.coop` | `productor@esperanza.coop` | `auditor@esperanza.coop` | `transportista@esperanza.coop` |
+| Estancia El Algarrobo | `admin@algarrobo.campo` | `agronomo@algarrobo.campo` | `productor@algarrobo.campo` | `auditor@algarrobo.campo` | `transportista@algarrobo.campo` |
+
+Password: `test123` for every account. The SPA login screen lists both realms
+(tenant names) at request time — no hardcoded ids (AP2).
 
 ## Testing
 

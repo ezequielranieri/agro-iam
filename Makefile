@@ -1,12 +1,20 @@
 SHELL := /bin/sh
 
-.PHONY: up down run build test vet migrate-up clean test-integration test-db
+.PHONY: up down run demo build test vet migrate-up clean test-integration test-db
 
 # Bring up db + redis and apply migrations. Then run the API locally:
 #   cp .env.example .env  (set DATABASE_URL)  &&  make run
 up:
 	docker compose up -d db redis
 	docker compose run --rm migrate
+
+# Full demo flow (slice 5): db + redis + migrations, seed the multi-role demo
+# data (2 tenants x 5 roles, password test123 — see README), then run the API.
+# The seed is idempotent, so `make demo` is safe to re-run after demoing.
+demo: up
+	@test -n "$$DATABASE_URL" || (echo "DATABASE_URL not set; copy .env.example to .env" && exit 1)
+	DATABASE_URL="$$DATABASE_URL" go run ./cmd/seed
+	DATABASE_URL="$$DATABASE_URL" go run ./cmd/api
 
 # Tear down containers but keep volumes (use down -v to wipe data).
 down:
