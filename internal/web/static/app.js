@@ -7,10 +7,11 @@ import { esc, el } from './dom.js';
 import { createApi } from './api.js';
 import { renderLogin } from './views/login.js';
 import { renderDashboard } from './views/dashboard.js';
+import { renderLots } from './views/lots.js';
 
 // The 7 routes (FR2). login is the unauthenticated surface; the rest render
-// inside the shell. The dashboard is live (S4); the other data routes are
-// placeholders until S5.
+// inside the shell. The dashboard is live (S4); the lots catalog is live now
+// (S5); the remaining data routes wire in the later S5 PRs.
 const NAV = [
   { route: 'dashboard', label: 'Dashboard', roles: null, note: 'KPI cards and charts.' },
   { route: 'lots', label: 'Lots', roles: null, note: 'The lots table lands in S5.' },
@@ -21,6 +22,14 @@ const NAV = [
 ];
 
 const VIEW_TITLES = Object.fromEntries(NAV.map((item) => [item.route, item.label]));
+
+// RENDERERS maps a route to its view renderer. Every live screen is an
+// (container, {api, role}) renderer; routes not in the map still land on the
+// placeholder card until the later S5 PRs wire them.
+const RENDERERS = {
+  dashboard: renderDashboard,
+  lots: renderLots,
+};
 
 let api;
 
@@ -76,9 +85,12 @@ function route() {
   renderShell(name, role);
   titleEl.textContent = VIEW_TITLES[name];
   roleBadgeEl.textContent = role;
-  if (name === 'dashboard') {
-    // The dashboard is live (S4, FD1): it fetches the list endpoints itself.
-    renderDashboard(viewEl, { api });
+  // Dispatch through RENDERERS: every live screen is a (container, {api,
+  // role}) renderer. Screens without an entry land on the placeholder card
+  // until a later S5 PR wires them.
+  const render = RENDERERS[name];
+  if (render) {
+    render(viewEl, { api, role });
     return;
   }
   renderView(el('div', { class: 'card empty ' + name }, item.note));

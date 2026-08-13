@@ -67,9 +67,41 @@ func TestStaticFSDashboardAssets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("static/app.js in embed FS: %v", err)
 	}
-	for _, want := range []string{"views/dashboard.js", "renderDashboard("} {
+	for _, want := range []string{"views/dashboard.js", "dashboard: renderDashboard"} {
 		if !strings.Contains(string(appJS), want) {
 			t.Errorf("app.js must wire the dashboard view (FD1): missing %q", want)
+		}
+	}
+}
+
+// TestStaticFSS5Assets proves the S5 catalog screens are wired (FS1): the RBAC
+// write-matrix module, the shared table-state helpers and the lots view must
+// ship in the binary, and app.js must route #/lots to renderLots instead of
+// the S3 placeholder card. Later S5 PRs extend this gate as the remaining
+// screens land.
+func TestStaticFSS5Assets(t *testing.T) {
+	fsys := StaticFS()
+	for _, name := range []string{
+		"static/matrix.js",
+		"static/views/table.js",
+		"static/views/lots.js",
+	} {
+		b, err := fs.ReadFile(fsys, name)
+		if err != nil {
+			t.Fatalf("%s in embed FS: %v", name, err)
+		}
+		if len(b) == 0 {
+			t.Fatalf("%s is empty", name)
+		}
+	}
+
+	appJS, err := fs.ReadFile(fsys, "static/app.js")
+	if err != nil {
+		t.Fatalf("static/app.js in embed FS: %v", err)
+	}
+	for _, want := range []string{"views/lots.js", "lots: renderLots"} {
+		if !strings.Contains(string(appJS), want) {
+			t.Errorf("app.js must wire the lots view (FS1): missing %q", want)
 		}
 	}
 }
@@ -87,8 +119,11 @@ func TestNoAccessTokenPersistence(t *testing.T) {
 		"static/dom.js",
 		"static/tokens.js",
 		"static/charts.js",
+		"static/matrix.js",
 		"static/views/login.js",
 		"static/views/dashboard.js",
+		"static/views/table.js",
+		"static/views/lots.js",
 	}
 	readAsset := func(t *testing.T, name string) string {
 		t.Helper()
@@ -102,7 +137,7 @@ func TestNoAccessTokenPersistence(t *testing.T) {
 	// Module-level prohibition: the token logic must not reference any
 	// browser persistence or DOM surface at all. The dashboard modules are
 	// pure math and a storage-agnostic view, so they belong in this list too.
-	for _, name := range []string{"static/tokens.js", "static/api.js", "static/dom.js", "static/charts.js"} {
+	for _, name := range []string{"static/tokens.js", "static/api.js", "static/dom.js", "static/charts.js", "static/matrix.js"} {
 		src := readAsset(t, name)
 		for _, banned := range []string{"localStorage", "sessionStorage", "document.cookie", "cookieStore"} {
 			if strings.Contains(src, banned) {
