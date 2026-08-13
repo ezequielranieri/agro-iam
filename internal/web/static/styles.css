@@ -308,3 +308,22 @@ body {
 .block-skeleton { height: 120px; margin-bottom: 12px; }
 
 .modal { position: fixed; inset: 0; background: rgba(13, 40, 24, 0.45); display: grid; place-items: center; z-index: 50; }
+
+/* ---- S5 catalog write forms (FS2, D2) ---- */
+
+.toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
+
+.form-card { margin-bottom: 16px; }
+
+.create-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0 16px;
+  align-items: end;
+}
+
+.create-form .form-actions { display: flex; gap: 8px; margin-bottom: 16px; }
+
+.btn-sm { padding: 8px 12px; font-size: 13px; }
+
+.table-wrap { overflow-x: auto; }

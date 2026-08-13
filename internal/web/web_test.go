@@ -75,16 +75,18 @@ func TestStaticFSDashboardAssets(t *testing.T) {
 }
 
 // TestStaticFSS5Assets proves the S5 catalog screens are wired (FS1): the RBAC
-// write-matrix module, the shared table-state helpers and the lots view must
-// ship in the binary, and app.js must route #/lots to renderLots instead of
-// the S3 placeholder card. Later S5 PRs extend this gate as the remaining
-// screens land.
+// write-matrix module, the shared table-state helpers and the catalog views
+// (lots, campaigns, applications) must ship in the binary, and app.js must
+// route each of them through the RENDERERS map instead of the S3 placeholder
+// card.
 func TestStaticFSS5Assets(t *testing.T) {
 	fsys := StaticFS()
 	for _, name := range []string{
 		"static/matrix.js",
 		"static/views/table.js",
 		"static/views/lots.js",
+		"static/views/campaigns.js",
+		"static/views/applications.js",
 	} {
 		b, err := fs.ReadFile(fsys, name)
 		if err != nil {
@@ -99,9 +101,13 @@ func TestStaticFSS5Assets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("static/app.js in embed FS: %v", err)
 	}
-	for _, want := range []string{"views/lots.js", "lots: renderLots"} {
+	for _, want := range []string{
+		"views/lots.js", "lots: renderLots",
+		"views/campaigns.js", "campaigns: renderCampaigns",
+		"views/applications.js", "applications: renderApplications",
+	} {
 		if !strings.Contains(string(appJS), want) {
-			t.Errorf("app.js must wire the lots view (FS1): missing %q", want)
+			t.Errorf("app.js must wire the catalog views (FS1): missing %q", want)
 		}
 	}
 }
