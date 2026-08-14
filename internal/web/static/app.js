@@ -14,22 +14,21 @@ import { renderUsers } from './views/users.js';
 import { renderAudit } from './views/audit.js';
 
 // The 7 routes (FR2). login is the unauthenticated surface; the rest render
-// inside the shell. The dashboard is live (S4); the lots catalog is live now
-// (S5); the remaining data routes wire in the later S5 PRs.
+// inside the shell. Every data route is live (S4/S5): dashboard, lots,
+// campaigns, applications, users and audit all have real renderers.
 const NAV = [
   { route: 'dashboard', label: 'Dashboard', roles: null, note: 'KPI cards and charts.' },
-  { route: 'lots', label: 'Lots', roles: null, note: 'The lots table lands in S5.' },
-  { route: 'campaigns', label: 'Campaigns', roles: null, note: 'The campaigns table lands in S5.' },
-  { route: 'applications', label: 'Applications', roles: null, note: 'The applications table lands in S5.' },
-  { route: 'users', label: 'Users', roles: ['admin'], note: 'The users grid lands in S5.' },
-  { route: 'audit', label: 'Audit', roles: ['admin', 'auditor'], note: 'The audit trail lands in S5.' },
+  { route: 'lots', label: 'Lots', roles: null, note: 'The lots catalog with search and sort.' },
+  { route: 'campaigns', label: 'Campaigns', roles: null, note: 'The campaigns catalog.' },
+  { route: 'applications', label: 'Applications', roles: null, note: 'The applications catalog.' },
+  { route: 'users', label: 'Users', roles: ['admin'], note: 'The users grid.' },
+  { route: 'audit', label: 'Audit', roles: ['admin', 'auditor'], note: 'The audit trail.' },
 ];
 
 const VIEW_TITLES = Object.fromEntries(NAV.map((item) => [item.route, item.label]));
 
 // RENDERERS maps a route to its view renderer. Every live screen is an
-// (container, {api, role}) renderer; routes not in the map still land on the
-// placeholder card until the later S5 PRs wire them.
+// (container, {api, role}) renderer; the map covers every route in NAV.
 const RENDERERS = {
   dashboard: renderDashboard,
   lots: renderLots,
