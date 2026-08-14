@@ -362,3 +362,70 @@ body {
 .badge.severity-warn { background: #FFF3E0; color: #E65100; }
 
 .badge.severity-critical { background: var(--danger-soft); color: var(--danger); }
+
+/* ---- Responsive (D2) ---- */
+
+/* Narrow screens: collapse the fixed sidebar into a top bar. The nav row
+   scrolls horizontally when the routes do not fit; the logout button sits at
+   the far right. Widgets and KPI grids reflow to a single column. */
+
+@media (max-width: 860px) {
+  .shell { grid-template-columns: 1fr; }
+
+  .sidebar {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    position: sticky;
+    top: 0;
+    z-index: 40;
+  }
+
+  .brand { font-size: 16px; padding: 0 4px; white-space: nowrap; }
+
+  .nav {
+    flex-direction: row;
+    gap: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    flex: 1;
+  }
+
+  .nav::-webkit-scrollbar { display: none; }
+
+  .nav a { white-space: nowrap; padding: 8px 10px; }
+
+  .sidebar-logout { margin-top: 0; padding: 8px 10px; }
+
+  .canvas { padding: 16px 16px 40px; }
+
+  .topbar { flex-wrap: wrap; }
+
+  .widgets { grid-template-columns: 1fr; }
+
+  .donut-wrap { flex-direction: column; align-items: stretch; }
+
+  .legend { min-width: 0; }
+}
+
+@media (max-width: 480px) {
+  .sidebar { padding: 10px 10px; }
+
+  .canvas { padding: 12px 12px 32px; }
+
+  .card { padding: 16px; }
+
+  .kpi { grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  .kpi-value { font-size: 22px; }
+
+  .widgets { gap: 12px; margin-top: 12px; }
+
+  .view-title { font-size: 18px; }
+
+  .table th,
+  .table td { padding: 10px 12px; }
+
+  .auth { padding: 16px; }
+}
